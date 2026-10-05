@@ -25,6 +25,25 @@ local storage.
 
 Each alert can be marked "It's fine", and stays hidden after that.
 
+## Categories that learn
+
+Tap any transaction to give it a category, or use **Sort payees** to work
+through every uncategorised payee, biggest first. The app learns in three layers:
+
+1. **This payment.** Set the category for one transaction only.
+2. **This payee.** "Use for all payments to Tesco, and future ones" (the default).
+   Money in and money out are separate, so an Amazon refund isn't counted as Shopping.
+3. **Learned guesses.** A small naive Bayes model trains on everything you've
+   categorised and suggests categories for payees it hasn't seen, from shared
+   words ("TESCO EXPRESS" after you've taught it "TESCO STORES"), bank codes
+   ("DD" for direct debits) and payment size. A guess shows with a dashed
+   outline and a "?" until you confirm it. If two categories are equally
+   likely it makes no guess, rather than a wrong one.
+
+Insights shows spending and income by category, with a monthly average.
+Transfers and savings aren't counted as spending. You can add or delete
+categories and export everything, with categories, to a CSV spreadsheet.
+
 ## Formats
 
 CSV (column layout is auto-detected and shown for checking before import,
@@ -50,6 +69,6 @@ python3 -m http.server 8000   # then open http://localhost:8000
 node --test                   # engine tests (run from this folder)
 ```
 
-`analyse.js` is the pure parsing and detection engine, shared by the page and
+`analyse.js` is the pure parsing and detection engine and `categorise.js` the category learning, shared by the page and
 the tests. `app.js` is the UI. `sw.js` caches the app's own files for offline use.
 Bump `CACHE` in `sw.js` when you change any file.

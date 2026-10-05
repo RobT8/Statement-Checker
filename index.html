@@ -31,6 +31,7 @@
       --in-text: #006300;
       --series-in: #2a78d6;
       --series-out: #eb6834;
+      --series-in-light: #9ec5f4;
       --high: #d03b3b;
       --medium: #ec835a;
       --low: #fab219;
@@ -52,6 +53,7 @@
         --in-text: #5fd35f;
         --series-in: #3987e5;
         --series-out: #d95926;
+        --series-in-light: #1c5cab;
         --danger-bg: #c43c3c;
         --shadow: none;
       }
@@ -60,7 +62,7 @@
       color-scheme: dark;
       --bg: #151514; --surface: #1f1f1e; --surface2: #2a2a28; --line: #353532;
       --text: #ffffff; --text2: #c3c2b7; --text3: #7d7c76; --accent: #3987e5;
-      --in-text: #5fd35f; --series-in: #3987e5; --series-out: #d95926; --danger-bg: #c43c3c; --shadow: none;
+      --in-text: #5fd35f; --series-in: #3987e5; --series-out: #d95926; --series-in-light: #1c5cab; --danger-bg: #c43c3c; --shadow: none;
     }
 
     * { box-sizing: border-box; }
@@ -192,6 +194,15 @@
       padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 30; max-width: calc(100% - 32px); }
     .empty { text-align: center; padding: 40px 16px; color: var(--text2); }
     .empty svg { width: 56px; height: 56px; color: var(--good); }
+    .pill { display: inline-block; font-size: 12px; line-height: 18px; padding: 0 7px; border-radius: 99px; background: var(--surface2); color: var(--text); border: 1px solid transparent; }
+    .pill.guess { background: none; border: 1px dashed var(--text3); color: var(--text2); }
+    .pill.none { background: none; color: var(--accent); padding-left: 0; }
+    .tx[data-cat-txn] { cursor: pointer; }
+    .cat-grid { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+    .cat-grid .chip { font-size: 15px; padding: 8px 12px; }
+    .chip.suggested { border: 2px dashed var(--accent); }
+    .stack { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--surface2); margin: 10px 0 8px; gap: 2px; }
+    .stack div { height: 100%; }
     details summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 14px; }
     @media (min-width: 480px) { .tile .v { font-size: 20px; } }
   </style>
@@ -233,6 +244,7 @@
   <input type="file" id="file-input" accept=".csv,.ofx,.qfx,.qif,.txt,text/csv,application/x-ofx" multiple hidden>
 
   <script src="analyse.js"></script>
+  <script src="categorise.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

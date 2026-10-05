@@ -3,6 +3,7 @@
   'use strict';
 
   const SC = window.SC;
+  const CAT = window.CAT;
   const KEY = 'statement-check.v1';
   const $ = (sel, el) => (el || document).querySelector(sel);
   const view = $('#view');
@@ -10,15 +11,17 @@
 
   // ------------------------------------------------------------- state ----
 
-  let db = { imports: [], txns: [], dismissed: {}, settings: { currency: 'GBP' } };
+  let db = { imports: [], txns: [], dismissed: {}, settings: { currency: 'GBP' }, cats: CAT.freshState() };
   let result = null;
+  let cats = new Map(); // txn id -> { cat, source, confidence }
   let tab = 'alerts';
-  const ui = { sev: 'all', showDismissed: false, q: '', txFilter: 'all', txLimit: 300, chartTable: false };
+  const ui = { sev: 'all', showDismissed: false, q: '', txFilter: 'all', cat: '', txLimit: 300, chartTable: false };
 
   function load() {
     try {
       const raw = localStorage.getItem(KEY);
       if (raw) db = Object.assign(db, JSON.parse(raw));
+      if (!db.cats || !Array.isArray(db.cats.list)) db.cats = CAT.freshState();
     } catch { /* private mode or blocked storage: start empty */ }
     try { const t = localStorage.getItem(KEY + '.tab'); if (t) tab = t; } catch { /* ignore */ }
   }
@@ -35,10 +38,15 @@
 
   function reanalyse() {
     result = SC.analyse(db.txns, { format: money, formatDate: niceDate });
+    recategorise();
     const n = visibleAlerts().length;
     const badge = $('#alert-badge');
     badge.hidden = !n;
     badge.textContent = n > 99 ? '99+' : n;
+  }
+
+  function recategorise() {
+    cats = CAT.categorise(db.txns, db.cats);
   }
 
   // ----------------------------------------------------------- helpers ----
@@ -245,6 +253,45 @@
     </div>`;
   }
 
+  function catById(id) {
+    return db.cats.list.find((c) => c.id === id);
+  }
+
+  function catPill(t) {
+    const info = cats.get(t.id);
+    const c = info && info.cat ? catById(info.cat) : null;
+    if (!c) return '<span class="pill none">+ Category</span>';
+    if (info.source === 'guess') return `<span class="pill guess" title="Guessed from your earlier choices">${esc(c.icon)} ${esc(c.name)}?</span>`;
+    return `<span class="pill">${esc(c.icon)} ${esc(c.name)}</span>`;
+  }
+
+  // How much is categorised, and by whom: a small stacked bar.
+  function categoryProgress() {
+    if (!db.txns.length) return '';
+    let you = 0;
+    let guess = 0;
+    for (const v of cats.values()) {
+      if (v.source === 'guess') guess++;
+      else if (v.source) you++;
+    }
+    const n = db.txns.length;
+    const none = n - you - guess;
+    const pct = (x) => Math.round((x / n) * 100);
+    const toSort = CAT.payeesToSort(db.txns, db.cats, cats).length;
+    return `<div class="card" style="padding:12px 14px">
+      <div class="row"><b class="grow">Categories</b>
+        ${toSort ? `<button class="btn primary small" data-act="sort">Sort ${toSort} payee${toSort === 1 ? '' : 's'}</button>` : '<span class="small muted">All sorted ✓</span>'}</div>
+      <div class="stack" role="img" aria-label="${pct(you)}% set by you, ${pct(guess)}% guessed, ${pct(none)}% not categorised">
+        <div style="width:${(you / n) * 100}%;background:var(--series-in)"></div><div style="width:${(guess / n) * 100}%;background:var(--series-in-light)"></div>
+      </div>
+      <div class="legend" style="margin:0;flex-wrap:wrap">
+        <span><i style="background:var(--series-in)"></i>Set by you ${pct(you)}%</span>
+        <span><i style="background:var(--series-in-light)"></i>Learned guesses ${pct(guess)}%</span>
+        <span><i style="background:var(--surface2);outline:1px solid var(--line)"></i>To do ${pct(none)}%</span>
+      </div>
+    </div>`;
+  }
+
   function renderTransactions() {
     const flagged = new Set(result.flags.filter((f) => f.reasons.some((r) => !db.dismissed[r.key])).map((f) => f.txn.id));
     const q = ui.q.trim().toLowerCase();
@@ -256,6 +303,9 @@
     if (ui.txFilter === 'flagged') list = list.filter((t) => flagged.has(t.id));
     if (ui.txFilter === 'in') list = list.filter((t) => t.amount > 0);
     if (ui.txFilter === 'out') list = list.filter((t) => t.amount < 0);
+    if (ui.cat === '__none') list = list.filter((t) => !cats.get(t.id).cat);
+    else if (ui.cat === '__guess') list = list.filter((t) => cats.get(t.id).source === 'guess');
+    else if (ui.cat) list = list.filter((t) => cats.get(t.id).cat === ui.cat);
     const total = list.reduce((s, t) => s + t.amount, 0);
 
     let html = `<h2>Transactions</h2>
@@ -264,6 +314,13 @@
         ${[['all', 'All'], ['flagged', 'Flagged'], ['out', 'Money out'], ['in', 'Money in']].map(([k, l]) =>
           `<button class="chip" data-txf="${k}" aria-pressed="${ui.txFilter === k}">${l}</button>`).join('')}
       </div>
+      <select id="cat-filter" aria-label="Filter by category" style="margin:4px 0 8px">
+        <option value="">All categories</option>
+        <option value="__none" ${ui.cat === '__none' ? 'selected' : ''}>Not categorised</option>
+        <option value="__guess" ${ui.cat === '__guess' ? 'selected' : ''}>Guessed — needs checking</option>
+        ${db.cats.list.map((c) => `<option value="${esc(c.id)}" ${ui.cat === c.id ? 'selected' : ''}>${esc(c.icon + ' ' + c.name)}</option>`).join('')}
+      </select>
+      ${categoryProgress()}
       <p class="muted small" style="margin:4px 0">${list.length.toLocaleString('en-GB')} transactions · net ${money(total, true)}</p>`;
     if (!list.length) return html + '<div class="empty"><p>No matching transactions.</p></div>';
 
@@ -286,10 +343,10 @@
         open = true;
       }
       const d = new Date(t.date + 'T00:00:00Z');
-      html += `<div class="tx">
+      html += `<div class="tx" data-cat-txn="${esc(t.id)}" role="button" tabindex="0" aria-label="Set category for ${esc(t.desc)}">
         <div class="d"><b>${d.getUTCDate()}</b>${d.toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'UTC' })}</div>
         <div class="grow"><div class="ellipsis">${flagged.has(t.id) ? '<span class="sev high" title="Flagged"><i aria-hidden="true"></i></span> ' : ''}${esc(t.desc)}</div>
-          <div class="muted small ellipsis">${esc(SC.titleCase(t.merchant))}${t.balance != null ? ' · bal ' + money(t.balance) : ''}</div></div>
+          <div class="muted small ellipsis">${catPill(t)} ${esc(SC.titleCase(t.merchant))}${t.balance != null ? ' · bal ' + money(t.balance) : ''}</div></div>
         <div class="a ${t.amount > 0 ? 'in' : ''}">${money(t.amount, true)}</div>
       </div>`;
     }
@@ -320,6 +377,8 @@
       ${ui.chartTable ? monthTable(s.months) : monthChart(s.months)}
       <button class="btn ghost small" data-act="chart-table">${ui.chartTable ? 'Show as chart' : 'Show as table'}</button>
 
+      ${categoryBreakdown()}
+
       <h3>Regular payments</h3>
       ${regular.length ? `<p class="muted small" style="margin:0 0 4px">About <b>${money(regularTotal)}</b> a month goes out on things that repeat.</p>
       <div class="card" style="padding:4px 14px">${regular.map((r) => `
@@ -335,6 +394,38 @@
           <span class="ellipsis">${esc(SC.titleCase(m))}</span><b class="nowrap">${money(v)}</b>
           <div class="bar"><div style="width:${Math.max(2, (v / topMax) * 100).toFixed(1)}%"></div></div>
         </div>`).join('')}</div>`;
+  }
+
+  function categoryBreakdown() {
+    const months = Math.max(1, result.stats.months.length);
+    const spend = new Map();
+    const income = new Map();
+    let moved = 0;
+    for (const t of db.txns) {
+      const id = cats.get(t.id).cat || '__none';
+      const c = catById(id);
+      if (c && c.type === 'both') { if (t.amount < 0) moved -= t.amount; continue; }
+      const m = t.amount < 0 ? spend : income;
+      m.set(id, (m.get(id) || 0) + Math.abs(t.amount));
+    }
+    const bars = (m) => {
+      const rows = [...m.entries()].sort((a, b) => b[1] - a[1]);
+      const max = rows.length ? rows[0][1] : 1;
+      return rows.map(([id, v]) => {
+        const c = catById(id);
+        const label = c ? `${c.icon} ${c.name}` : 'Not categorised';
+        return `<div class="hbar" data-catfilter="${esc(id)}" style="cursor:pointer">
+          <span class="ellipsis">${esc(label)}</span><span class="nowrap"><b>${money(v)}</b> <span class="muted small">· ${whole(v / months)}/mo</span></span>
+          <div class="bar"><div style="width:${Math.max(2, (v / max) * 100).toFixed(1)}%${c ? '' : ';background:var(--text3)'}"></div></div>
+        </div>`;
+      }).join('');
+    };
+    const hasAny = [...cats.values()].some((v) => v.cat);
+    return `<h3>Spending by category</h3>
+      ${hasAny ? '' : '<p class="muted small" style="margin:0 0 6px">Nothing categorised yet. <button class="btn ghost small" data-act="sort">Sort your payees</button> and this fills in.</p>'}
+      <div class="card">${bars(spend) || '<p class="muted small">No spending.</p>'}
+        ${moved ? `<p class="muted small" style="margin:8px 0 0">Plus ${money(moved)} in transfers and savings, not counted as spending.</p>` : ''}</div>
+      ${income.size ? `<h3>Income by category</h3><div class="card">${bars(income)}</div>` : ''}`;
   }
 
   function monthTable(months) {
@@ -434,13 +525,44 @@
         <div class="row" style="margin-top:14px;flex-wrap:wrap">
           <button class="btn small" data-act="backup" ${db.txns.length ? '' : 'disabled'}>Save a backup</button>
           <button class="btn small" data-act="restore">Restore backup</button>
+          <button class="btn small" data-act="export-csv" ${db.txns.length ? '' : 'disabled'}>Export to spreadsheet (CSV)</button>
         </div>
       </div>
+      ${categoryManager()}
       <div class="card small">
         <b>Privacy</b>
         <p class="muted" style="margin:4px 0 0">Statements are read and analysed inside this app and stored only in this browser on this device. The app is locked down so it cannot send anything over the internet. Clearing your browser's site data — or removing the app — deletes everything.</p>
       </div>
       ${db.txns.length ? '<button class="btn danger block" data-act="wipe" style="margin:18px 0 8px">Delete all data</button>' : ''}`;
+  }
+
+  function categoryManager() {
+    const counts = new Map();
+    for (const v of cats.values()) if (v.cat) counts.set(v.cat, (counts.get(v.cat) || 0) + 1);
+    const rules = Object.keys(db.cats.payeeCats).length + Object.keys(db.cats.txnCats).length;
+    const icons = ['🏷️', '🐶', '🚲', '🎓', '⛽', '🍷', '💇', '🏋️', '🧹', '📚', '🎮', '👶', '🌱', '⚽', '🏥', '💳'];
+    const group = (type, title) => {
+      const list = db.cats.list.filter((c) => c.type === type);
+      if (!list.length) return '';
+      return `<div class="small muted" style="margin:10px 0 2px">${title}</div>` + list.map((c) => `
+        <div class="row" style="padding:4px 0">
+          <span class="grow ellipsis">${esc(c.icon)} ${esc(c.name)} <span class="muted small">${counts.get(c.id) ? '· ' + counts.get(c.id) : ''}</span></span>
+          <button class="btn ghost small" data-delcat="${esc(c.id)}" aria-label="Delete ${esc(c.name)}">Delete</button>
+        </div>`).join('');
+    };
+    return `<h3>Categories</h3>
+      <div class="card">
+        <p class="muted small" style="margin:0">You've taught it ${rules} rule${rules === 1 ? '' : 's'}. Tap any transaction to change its category.</p>
+        ${group('out', 'Spending')}${group('in', 'Income')}${group('both', 'Either way')}
+        <div class="small muted" style="margin:14px 0 4px">Add a category</div>
+        <div class="row" style="flex-wrap:wrap">
+          <select id="new-cat-icon" aria-label="Icon" style="width:72px">${icons.map((i) => `<option>${i}</option>`).join('')}</select>
+          <input id="new-cat-name" placeholder="Name, e.g. Pets" maxlength="40" aria-label="Category name" style="flex:1;min-width:120px;border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:10px 12px">
+          <select id="new-cat-type" aria-label="Type" style="width:auto"><option value="out">Spending</option><option value="in">Income</option><option value="both">Either</option></select>
+          <button class="btn primary small" data-act="add-cat">Add</button>
+        </div>
+        ${rules ? '<button class="btn ghost small" data-act="reset-learning" style="margin-top:8px">Forget everything it has learned</button>' : ''}
+      </div>`;
   }
 
   // ------------------------------------------------------------ import ----
@@ -523,8 +645,156 @@
     });
   }
 
+  // ------------------------------------------------------- categories ----
+
+  function openSheet(html) {
+    const bg = document.createElement('div');
+    bg.className = 'sheet-bg';
+    bg.innerHTML = `<div class="sheet" role="dialog" aria-modal="true">${html}</div>`;
+    document.body.appendChild(bg);
+    const close = () => { bg.remove(); popBack = null; render(); };
+    popBack = close;
+    bg.addEventListener('click', (e) => { if (e.target === bg) close(); });
+    return { el: $('.sheet', bg), close };
+  }
+
+  function catGrid(dir, current, suggested) {
+    return `<div class="cat-grid">${db.cats.list.filter((c) => CAT.allows(c, dir)).map((c) =>
+      `<button class="chip${c.id === suggested ? ' suggested' : ''}" data-pick="${esc(c.id)}" aria-pressed="${c.id === current}">${esc(c.icon)} ${esc(c.name)}</button>`).join('')}
+      <button class="chip" data-newcat="1">+ New</button></div>`;
+  }
+
+  function addCategoryPrompt(dir) {
+    const name = (prompt('Name for the new category') || '').trim().slice(0, 40);
+    if (!name) return null;
+    const existing = db.cats.list.find((c) => c.name.toLowerCase() === name.toLowerCase());
+    if (existing) return existing.id;
+    const c = { id: CAT.slug(name), name, icon: '🏷️', type: dir };
+    db.cats.list.push(c);
+    save();
+    return c.id;
+  }
+
+  // Tap a transaction: choose its category, for this payment or the payee.
+  function openPicker(id) {
+    const t = db.txns.find((x) => x.id === id);
+    if (!t) return;
+    const dir = CAT.direction(t);
+    const key = CAT.payeeKey(t);
+    const info = cats.get(t.id);
+    const samePayee = db.txns.filter((x) => CAT.payeeKey(x) === key).length;
+    const name = SC.titleCase(t.merchant);
+    const guessCat = info.source === 'guess' ? catById(info.cat) : null;
+    const sh = openSheet(`
+      <h2 style="margin-bottom:2px">${esc(name)}</h2>
+      <p class="sub">${esc(t.desc)} · ${niceDate(t.date)} · <b>${money(t.amount, true)}</b></p>
+      ${guessCat ? `<div class="card small" style="margin-top:0">🧠 <b>Learned guess: ${esc(guessCat.icon + ' ' + guessCat.name)}</b> <span class="muted">(${Math.round(info.confidence * 100)}% sure, from payments you've already categorised). Tap it to confirm.</span></div>` : ''}
+      ${catGrid(dir, info.source !== 'guess' ? info.cat : null, guessCat ? guessCat.id : null)}
+      <label class="check"><input type="checkbox" id="always" checked> Use for all ${samePayee > 1 ? samePayee + ' ' : ''}${dir === 'out' ? 'payments to' : 'money from'} ${esc(name)} — and future ones</label>
+      <div class="row" style="margin-top:8px">
+        ${info.source === 'manual' || info.source === 'payee' ? '<button class="btn grow" data-x="clear">Clear category</button>' : ''}
+        <button class="btn grow" data-x="close">Close</button>
+      </div>`);
+    sh.el.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      const always = $('#always', sh.el).checked;
+      let pick = b.dataset.pick;
+      if (b.dataset.newcat) pick = addCategoryPrompt(dir);
+      if (pick) {
+        if (always) { db.cats.payeeCats[key] = pick; delete db.cats.txnCats[t.id]; }
+        else db.cats.txnCats[t.id] = pick;
+        save(); recategorise();
+        const c = catById(pick);
+        toast(always ? `${name} → ${c.name}. Similar payments will be guessed too.` : `Set to ${c.name}.`);
+        sh.close();
+      } else if (b.dataset.x === 'clear') {
+        delete db.cats.txnCats[t.id];
+        if (always) delete db.cats.payeeCats[key];
+        save(); recategorise(); sh.close();
+      } else if (b.dataset.x === 'close') sh.close();
+    });
+  }
+
+  // Walk through uncategorised payees, biggest first. Each answer retrains
+  // the guesses, so later suggestions get better as you go.
+  function openSort() {
+    const skipped = new Set();
+    let done = 0;
+    const sh = openSheet('<div id="sort-body"></div>');
+    const body = $('#sort-body', sh.el);
+    const step = () => {
+      const queue = CAT.payeesToSort(db.txns, db.cats, cats).filter((g) => !skipped.has(g.key));
+      if (!queue.length) {
+        body.innerHTML = `<div class="empty" style="padding:20px 0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m8 12 3 3 5-6"/></svg>
+          <p><b>${done ? `${done} payee${done === 1 ? '' : 's'} sorted.` : 'Nothing left to sort.'}</b><br>New statements will be categorised automatically from what you've taught it.</p></div>
+          <button class="btn primary block" data-x="close">Done</button>`;
+        return;
+      }
+      const g = queue[0];
+      const sample = g.txns[0];
+      const guess = cats.get(sample.id);
+      const gc = guess.source === 'guess' ? catById(guess.cat) : null;
+      body.innerHTML = `<p class="small muted" style="margin:0">${done} sorted · ${queue.length} to go · each answer teaches the app</p>
+        <div class="card">
+          <div class="small muted">${g.dir === 'out' ? 'Money out to' : 'Money in from'}</div>
+          <div style="font-size:20px;font-weight:700">${esc(SC.titleCase(g.merchant))}</div>
+          <div class="muted small">${g.txns.length} payment${g.txns.length === 1 ? '' : 's'} · ${money(g.total)} total · e.g. “${esc(sample.desc)}”</div>
+          ${gc ? `<div class="small" style="margin-top:8px">🧠 Suggested: <b>${esc(gc.icon + ' ' + gc.name)}</b> <span class="muted">(${Math.round(guess.confidence * 100)}% sure)</span></div>` : ''}
+        </div>
+        ${catGrid(g.dir, null, gc ? gc.id : null)}
+        <div class="row" style="margin-top:12px">
+          <button class="btn grow" data-x="skip">Skip</button>
+          <button class="btn grow" data-x="close">Finish later</button>
+        </div>`;
+      body.dataset.key = g.key;
+      body.dataset.dir = g.dir;
+    };
+    sh.el.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      let pick = b.dataset.pick;
+      if (b.dataset.newcat) pick = addCategoryPrompt(body.dataset.dir);
+      if (pick) {
+        db.cats.payeeCats[body.dataset.key] = pick;
+        done++;
+        save(); recategorise(); step();
+      } else if (b.dataset.x === 'skip') { skipped.add(body.dataset.key); step(); }
+      else if (b.dataset.x === 'close') sh.close();
+    });
+    step();
+  }
+
+  function exportCSV() {
+    const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = ['Date,Description,Payee,Amount,Balance,Category,Category source'];
+    for (const t of [...db.txns].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))) {
+      const info = cats.get(t.id);
+      const c = info.cat ? catById(info.cat) : null;
+      const src = { manual: 'you (this payment)', payee: 'you (payee rule)', guess: 'learned guess' }[info.source] || '';
+      lines.push([t.date, q(t.desc), q(SC.titleCase(t.merchant)), t.amount.toFixed(2), t.balance == null ? '' : t.balance.toFixed(2), q(c ? c.name : ''), q(src)].join(','));
+    }
+    download(lines.join('\n'), 'text/csv', `statement-check-transactions-${new Date().toISOString().slice(0, 10)}.csv`);
+    toast('Transactions exported.');
+  }
+
+  function download(text, type, filename) {
+    const url = URL.createObjectURL(new Blob([text], { type }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
   let popBack = null;
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && popBack) popBack(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && popBack) popBack();
+    const row = e.target.closest && e.target.closest('[data-cat-txn]');
+    if (row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openPicker(row.dataset.catTxn); }
+  });
 
   function commit(name, parsed) {
     if (!parsed.length) { toast(`No transactions found in ${name}.`); return; }
@@ -553,7 +823,8 @@
         return;
       }
       if (db.txns.length && !confirm('Replace everything on this device with the backup?')) return;
-      db = { imports: data.imports || [], txns: data.txns, dismissed: data.dismissed || {}, settings: data.settings || { currency: 'GBP' } };
+      db = { imports: data.imports || [], txns: data.txns, dismissed: data.dismissed || {}, settings: data.settings || { currency: 'GBP' },
+        cats: data.cats && Array.isArray(data.cats.list) ? data.cats : CAT.freshState() };
       save();
       reanalyse();
       toast('Backup restored.');
@@ -563,14 +834,7 @@
 
   function backup() {
     const data = JSON.stringify({ app: 'statement-check', version: 1, saved: new Date().toISOString(), ...db });
-    const url = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `statement-check-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    download(data, 'application/json', `statement-check-backup-${new Date().toISOString().slice(0, 10)}.json`);
     toast('Backup saved. It contains your transactions — keep it somewhere private.');
   }
 
@@ -579,7 +843,7 @@
   let restoring = false;
 
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('button, [data-merchant]');
+    const t = e.target.closest('button, [data-merchant], [data-cat-txn], [data-catfilter]');
     if (!t) return;
     const d = t.dataset;
     if (d.tab) return go(d.tab);
@@ -593,6 +857,15 @@
     if (d.undismiss) {
       d.undismiss.split('\n').forEach((k) => { delete db.dismissed[k]; });
       save(); reanalyse(); return render();
+    }
+    if (d.catTxn) return openPicker(d.catTxn);
+    if (d.catfilter) { ui.cat = d.catfilter === '__none' ? '__none' : d.catfilter; ui.q = ''; ui.txFilter = 'all'; return go('transactions'); }
+    if (d.delcat) {
+      const c = catById(d.delcat);
+      if (!c || !confirm(`Delete the category “${c.name}”? Payments in it become uncategorised.`)) return;
+      db.cats.list = db.cats.list.filter((x) => x.id !== c.id);
+      for (const m of [db.cats.payeeCats, db.cats.txnCats]) for (const k of Object.keys(m)) if (m[k] === c.id) delete m[k];
+      save(); recategorise(); return render();
     }
     if (d.merchant) { ui.q = d.merchant; ui.txFilter = 'all'; return go('transactions'); }
     if (d.month) { ui.q = d.month; ui.txFilter = 'out'; return go('transactions'); }
@@ -611,9 +884,24 @@
       case 'more': ui.txLimit += 300; render(); break;
       case 'chart-table': ui.chartTable = !ui.chartTable; render(); break;
       case 'backup': backup(); break;
+      case 'sort': openSort(); break;
+      case 'export-csv': exportCSV(); break;
+      case 'add-cat': {
+        const name = ($('#new-cat-name').value || '').trim().slice(0, 40);
+        if (!name) return toast('Type a name first.');
+        db.cats.list.push({ id: CAT.slug(name), name, icon: $('#new-cat-icon').value, type: $('#new-cat-type').value });
+        save(); render(); toast(`Added ${name}.`);
+        break;
+      }
+      case 'reset-learning':
+        if (!confirm('Forget every category you have set? Your categories list stays.')) return;
+        db.cats.txnCats = {};
+        db.cats.payeeCats = {};
+        save(); recategorise(); render();
+        break;
       case 'wipe':
         if (!confirm('Delete every statement and setting from this device? This cannot be undone.')) return;
-        db = { imports: [], txns: [], dismissed: {}, settings: db.settings };
+        db = { imports: [], txns: [], dismissed: {}, settings: db.settings, cats: CAT.freshState() };
         save(); reanalyse(); render(); toast('All data deleted.');
         break;
     }
@@ -632,6 +920,7 @@
   });
 
   document.addEventListener('change', (e) => {
+    if (e.target.id === 'cat-filter') { ui.cat = e.target.value; ui.txLimit = 300; return render(); }
     if (e.target.id === 'currency') { db.settings.currency = e.target.value; save(); reanalyse(); render(); }
   });
 
