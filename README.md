@@ -67,7 +67,22 @@ categories and export everything, with categories, to a CSV spreadsheet.
 
 CSV (column layout is auto-detected and shown for checking before import,
 including split *paid in / paid out* columns, preambles, UK/US dates and
-`1.234,56` amounts), OFX/QFX and QIF. PDF isn't supported.
+`1.234,56` amounts), OFX/QFX, QIF and PDF.
+
+**PDF statements** are read on the device with a bundled copy of pdf.js
+(`vendor/pdfjs`, Apache-2.0). A PDF holds only words and their positions, so
+`pdfstatement.js` rebuilds the table:
+
+1. Words are grouped into lines by height on the page, and into cells by the gaps between them.
+2. The column headings ("Paid out", "Paid in", "Balance"…) are located, and each amount is assigned to the column it sits under.
+3. A date starts a new day. Wrapped description lines join whichever amount line they sit closest to, which handles both banks that print the amount on the first line and banks that print it on the last.
+4. Year-less dates ("05 Mar") take their year from the statement, counting back across New Year.
+5. Where there's a running balance, it settles whether an amount was money in or out, and every line is checked against it. The import screen shows the result ("All 56 running balances add up").
+
+Scanned or photographed statements have no text and can't be read.
+Password-protected PDFs ask for the password, which never leaves the device.
+`test-fixtures/` holds generated fake statements in three layouts, used by
+`pdfstatement.test.js`.
 
 ## Putting it on your phone
 
@@ -92,6 +107,6 @@ python3 -m http.server 8000   # then open http://localhost:8000
 node --test                   # engine tests (run from this folder)
 ```
 
-`analyse.js` is the pure parsing and detection engine and `categorise.js` the category learning, shared by the page and
+`analyse.js` is the pure parsing and detection engine, `categorise.js` the category learning and `pdfstatement.js` the PDF reader, shared by the page and
 the tests. `app.js` is the UI. `sw.js` caches the app's own files for offline use.
 Bump `CACHE` in `sw.js` when you change any file.

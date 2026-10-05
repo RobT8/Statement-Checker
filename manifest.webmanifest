@@ -14,6 +14,6 @@
     { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "file_handlers": [
-    { "action": "./", "accept": { "text/csv": [".csv"], "application/x-ofx": [".ofx", ".qfx"], "application/qif": [".qif"] } }
+    { "action": "./", "accept": { "application/pdf": [".pdf"], "text/csv": [".csv"], "application/x-ofx": [".ofx", ".qfx"], "application/qif": [".qif"] } }
   ]
 }

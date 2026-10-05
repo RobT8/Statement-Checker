@@ -1,0 +1,112 @@
+[
+ {
+  "date": "2025-12-16",
+  "desc": "NETFLIX.COM",
+  "amount": -3.08
+ },
+ {
+  "date": "2025-12-18",
+  "desc": "CARD PAYMENT TO AMAZON MARKETPLACE AMZN.CO.UK",
+  "amount": -27.07
+ },
+ {
+  "date": "2025-12-19",
+  "desc": "SAINSBURYS S/MKT",
+  "amount": -51.49
+ },
+ {
+  "date": "2025-12-20",
+  "desc": "SAINSBURYS S/MKT",
+  "amount": -36.25
+ },
+ {
+  "date": "2025-12-21",
+  "desc": "SAINSBURYS S/MKT",
+  "amount": -76.66
+ },
+ {
+  "date": "2025-12-21",
+  "desc": "ACME LTD SALARY BGC",
+  "amount": 2450
+ },
+ {
+  "date": "2025-12-22",
+  "desc": "COSTA COFFEE",
+  "amount": -15.45
+ },
+ {
+  "date": "2025-12-22",
+  "desc": "TESCO STORES 3021 LONDON",
+  "amount": -16.21
+ },
+ {
+  "date": "2025-12-24",
+  "desc": "SHELL PETROL",
+  "amount": -76.33
+ },
+ {
+  "date": "2025-12-24",
+  "desc": "TESCO STORES 3021 LONDON",
+  "amount": -91.21
+ },
+ {
+  "date": "2025-12-27",
+  "desc": "SAINSBURYS S/MKT",
+  "amount": -81.73
+ },
+ {
+  "date": "2025-12-29",
+  "desc": "SAINSBURYS S/MKT",
+  "amount": -77.5
+ },
+ {
+  "date": "2025-12-30",
+  "desc": "COSTA COFFEE",
+  "amount": -38.02
+ },
+ {
+  "date": "2025-12-30",
+  "desc": "FASTER PAYMENT TO J SMITH RENT MARCH",
+  "amount": -14.16
+ },
+ {
+  "date": "2026-01-04",
+  "desc": "SAINSBURYS S/MKT",
+  "amount": -18.02
+ },
+ {
+  "date": "2026-01-04",
+  "desc": "ACME LTD SALARY BGC",
+  "amount": 2450
+ },
+ {
+  "date": "2026-01-05",
+  "desc": "FASTER PAYMENT TO J SMITH RENT MARCH",
+  "amount": -53.18
+ },
+ {
+  "date": "2026-01-09",
+  "desc": "SAINSBURYS S/MKT",
+  "amount": -31.18
+ },
+ {
+  "date": "2026-01-10",
+  "desc": "TESCO STORES 3021 LONDON",
+  "amount": -98.18
+ },
+ {
+  "date": "2026-01-10",
+  "desc": "SHELL PETROL",
+  "amount": -982.95
+ },
+ {
+  "date": "2026-01-12",
+  "desc": "CARD PAYMENT TO AMAZON MARKETPLACE AMZN.CO.UK",
+  "amount": -808.74
+ },
+ {
+  "date": "2026-01-14",
+  "desc": "COSTA COFFEE",
+  "amount": -105.18
+ }
+]

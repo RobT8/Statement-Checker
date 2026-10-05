@@ -4,6 +4,7 @@
 
   const SC = window.SC;
   const CAT = window.CAT;
+  const PDFS = window.PDFS;
   const KEY = 'statement-check.v1';
   const $ = (sel, el) => (el || document).querySelector(sel);
   const view = $('#view');
@@ -170,7 +171,7 @@
   function dropZone() {
     return `<div class="drop" id="drop">
       ${UPLOAD_ICON}
-      <p style="margin:8px 0 14px"><b>Load a bank statement</b><br><span class="muted small">CSV, OFX, QFX or QIF — exported from your banking app or website</span></p>
+      <p style="margin:8px 0 14px"><b>Load a bank statement</b><br><span class="muted small">PDF, CSV, OFX, QFX or QIF — downloaded from your banking app or website</span></p>
       <button class="btn primary" data-act="pick">Choose file</button>
     </div>`;
   }
@@ -189,14 +190,14 @@
 
   function howToExport() {
     return `<details class="card small"><summary>How do I get a CSV from my bank?</summary>
-      <p class="muted">Most banks don't offer this in the app's statement PDF — look for <b>Export</b> or <b>Download transactions</b> instead:</p>
+      <p class="muted">Look for <b>Export</b> or <b>Download transactions</b>:</p>
       <ul class="muted" style="padding-left:18px">
         <li><b>Monzo:</b> Account → Statements → Export → CSV</li>
         <li><b>Starling:</b> Account → Statements → choose dates → CSV</li>
         <li><b>Barclays, HSBC, Lloyds, NatWest, Santander, Nationwide:</b> sign in on the website → your account → Export / Download transactions → CSV or Excel CSV</li>
         <li><b>Credit cards</b> often show spending as positive numbers — tick “Flip signs” on the import screen.</li>
       </ul>
-      <p class="muted">PDF statements aren't supported: their layouts vary too much to read reliably.</p>
+      <p class="muted"><b>PDF statements</b> work too — the same PDF you'd download from online banking. CSV is the most reliable, and scanned or photographed statements can't be read.</p>
     </details>`;
   }
 
@@ -594,9 +595,9 @@
   async function handleFiles(files) {
     for (const file of files) {
       const name = file.name || 'statement';
-      if (/\.(pdf)$/i.test(name)) { toast("PDFs can't be read — export a CSV from your bank instead."); continue; }
       if (/\.(xlsx?|numbers)$/i.test(name)) { toast('Save the spreadsheet as CSV first, then load that.'); continue; }
       if (file.size > 20 * 1024 * 1024) { toast(`${name} is too big (over 20 MB).`); continue; }
+      if (/\.pdf$/i.test(name) || file.type === 'application/pdf') { await importPdf(file); continue; }
       const text = await file.text();
       if (SC.looksLikeOFX(text)) { commit(name, SC.parseOFX(text)); continue; }
       if (SC.looksLikeQIF(text)) { commit(name, SC.parseQIF(text)); continue; }
@@ -604,6 +605,106 @@
       if (!rows.length) { toast(`${name} looks empty.`); continue; }
       await mappingSheet(name, rows);
     }
+  }
+
+  // ---------------------------------------------------------------- PDF ----
+
+  let pdfjsLib = null;
+  async function loadPdfjs() {
+    if (!pdfjsLib) {
+      pdfjsLib = await import('./vendor/pdfjs/pdf.min.mjs');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.mjs';
+    }
+    return pdfjsLib;
+  }
+
+  async function importPdf(file) {
+    const name = file.name || 'statement.pdf';
+    toast(`Reading ${name}…`);
+    let pages;
+    try {
+      const pdfjs = await loadPdfjs();
+      const data = new Uint8Array(await file.arrayBuffer());
+      let password;
+      for (;;) {
+        const task = pdfjs.getDocument({ data: data.slice(), password, isEvalSupported: false, verbosity: 0 });
+        try {
+          const doc = await task.promise;
+          pages = await PDFS.pagesFromPdf(doc);
+          await task.destroy();
+          break;
+        } catch (err) {
+          await task.destroy();
+          if (err && err.name === 'PasswordException') {
+            password = prompt(err.code === 2 ? 'Wrong password — try again:' : `${name} is password protected. Enter its password (it stays on this device):`);
+            if (password === null) return;
+            continue;
+          }
+          throw err;
+        }
+      }
+    } catch {
+      toast(`Couldn't open ${name} as a PDF.`);
+      return;
+    }
+    const parsed = PDFS.parseStatement(pages);
+    if (parsed.scanned) { toast(`${name} is a scanned image with no text in it, so it can't be read. Try downloading the statement again as a PDF or CSV from online banking.`); return; }
+    if (!parsed.txns.length) { toast(`No transactions found in ${name}. If your bank offers CSV export, try that instead.`); return; }
+    const t = $('.toast');
+    if (t) t.remove();
+    await pdfSheet(name, parsed);
+  }
+
+  // What was read, and how sure we are: a statement with a running balance
+  // can be checked line by line.
+  function pdfSheet(name, parsed) {
+    return new Promise((resolve) => {
+      let flip = false;
+      const dates = parsed.txns.map((t) => t.date).sort();
+      const ok = parsed.balanceChecked > 0 && parsed.balanceOk === parsed.balanceChecked;
+      const check = !parsed.balanceChecked
+        ? `<div class="card small">ℹ️ <b>This statement has no running balance</b>, so the reading can't be double-checked automatically. Compare a few rows below with your statement.</div>`
+        : ok
+          ? `<div class="card small">✅ <b>All ${parsed.balanceChecked} running balances add up</b> — the amounts and in/out were read correctly.</div>`
+          : `<div class="card small">⚠️ <b>${parsed.balanceChecked - parsed.balanceOk} of ${parsed.balanceChecked} balances don't add up.</b> Some lines may have been misread. After importing they'll show as “Balance doesn't add up” alerts, and you can fix them with Edit details.</div>`;
+      const bg = document.createElement('div');
+      bg.className = 'sheet-bg';
+      bg.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="pdf-title">
+        <h2 id="pdf-title">Check the PDF reading</h2>
+        <p class="sub ellipsis">${esc(name)}</p>
+        <p class="small" style="margin:0 0 8px"><b>${parsed.txns.length} transactions</b> · ${niceDate(dates[0])} – ${niceDate(dates[dates.length - 1])}</p>
+        ${check}
+        <label class="check"><input type="checkbox" id="p-flip"> Flip signs (if spending shows as money in)</label>
+        <div id="p-preview" class="preview"></div>
+        <div class="row">
+          <button class="btn grow" data-x="cancel">Cancel</button>
+          <button class="btn primary grow" data-x="ok">Import</button>
+        </div>
+      </div>`;
+      document.body.appendChild(bg);
+      const sheet = $('.sheet', bg);
+      const current = () => parsed.txns.map((t) => (flip ? { ...t, amount: -t.amount } : t));
+      const preview = () => {
+        const list = current();
+        const outs = list.filter((t) => t.amount < 0).length;
+        const rows = list.length > 10 ? [...list.slice(0, 7), null, ...list.slice(-2)] : list;
+        $('#p-preview', sheet).innerHTML = `<p class="small muted" style="margin:0 0 6px">${outs} money out, ${list.length - outs} money in.</p>
+          <table class="data"><tbody>${rows.map((t) => t
+            ? `<tr><td>${niceDate(t.date)}</td><td style="text-align:left;max-width:150px" class="ellipsis">${esc(t.desc)}</td><td>${money(t.amount, true)}</td></tr>`
+            : '<tr><td colspan="3" style="text-align:center" class="muted">⋯</td></tr>').join('')}</tbody></table>`;
+      };
+      $('#p-flip', sheet).addEventListener('change', (e) => { flip = e.target.checked; preview(); });
+      preview();
+      const close = () => { bg.remove(); popBack = null; resolve(); };
+      popBack = close;
+      sheet.addEventListener('click', (e) => {
+        const x = e.target.closest('[data-x]');
+        if (!x) return;
+        if (x.dataset.x === 'ok') commit(name, current());
+        close();
+      });
+      bg.addEventListener('click', (e) => { if (e.target === bg) close(); });
+    });
   }
 
   function mappingSheet(name, rows) {
@@ -996,7 +1097,7 @@
       save(); reanalyse(); return render();
     }
     switch (d.act) {
-      case 'pick': restoring = false; fileInput.accept = '.csv,.ofx,.qfx,.qif,.txt,text/csv'; fileInput.multiple = true; fileInput.click(); break;
+      case 'pick': restoring = false; fileInput.accept = '.pdf,.csv,.ofx,.qfx,.qif,.txt,application/pdf,text/csv'; fileInput.multiple = true; fileInput.click(); break;
       case 'restore': restoring = true; fileInput.accept = '.json,application/json'; fileInput.multiple = false; fileInput.click(); break;
       case 'sample': commit('Sample current account.csv', SC.applyMapping(SC.parseCSV(SC.sampleCSV()), SC.guessMapping(SC.parseCSV(SC.sampleCSV()))).txns); break;
       case 'toggle-dismissed': ui.showDismissed = !ui.showDismissed; reanalyse(); render(); break;
