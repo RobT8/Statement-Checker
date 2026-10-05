@@ -1,0 +1,19 @@
+{
+  "name": "Statement Check",
+  "short_name": "Statements",
+  "description": "Checks your bank statements for anything unusual. Runs entirely on your phone.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f6f3",
+  "theme_color": "#2a78d6",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "file_handlers": [
+    { "action": "./", "accept": { "text/csv": [".csv"], "application/x-ofx": [".ofx", ".qfx"], "application/qif": [".qif"] } }
+  ]
+}
