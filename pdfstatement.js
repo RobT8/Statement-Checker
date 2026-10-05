@@ -18,7 +18,7 @@
 
   const SC = root.SC || (typeof require === 'function' ? require('./analyse.js') : null);
 
-  const MONEY_RE = /^\(?-?[£$€]?\s?-?\d{1,3}(?:,\d{3})*\.\d{2}\)?(?:\s?(?:CR|DR|D|C|-))?$|^\(?-?[£$€]?\s?-?\d+\.\d{2}\)?(?:\s?(?:CR|DR|D|C|-))?$/i;
+  const MONEY_RE = /^\(?-?[£$€]?\s?-?\d{1,3}(?:,\d{3})*\.\d{2}\)?(?:\s?(?:CR|DR|OD|D|C|-))?$|^\(?-?[£$€]?\s?-?\d+\.\d{2}\)?(?:\s?(?:CR|DR|OD|D|C|-))?$/i;
   const SKIP_RE = /brought forward|carried forward|opening balance|closing balance|balance b\/?f|balance c\/?f|start(?:ing)? balance|end(?:ing)? balance|previous balance|balance from previous|new balance/i;
   const NOISE_RE = /^(page \d+( of \d+)?|total|totals|continued|sub-?total)\b/i;
   const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -178,7 +178,7 @@
 
   function parseStatement(pages, options) {
     const opts = options || {};
-    const lines = linesFromPages(pages).map((l) => ({ ...l, cells: splitMoneyCells(l.cells) }));
+    const lines = mergeHeaderLines(linesFromPages(pages).map((l) => ({ ...l, cells: splitMoneyCells(l.cells) })));
     const textCount = lines.reduce((n, l) => n + l.cells.length, 0);
     const result = { txns: [], skipped: 0, hasBalance: false, balanceChecked: 0, balanceOk: 0, scanned: textCount < 15, columns: null };
     if (result.scanned) return result;
@@ -196,6 +196,40 @@
     const rows = classify(lines, { order, year: latest - (trial.endYear - latest), month: 0 }).rows;
     result.columns = rows.some((r) => r.kind === 'header');
     return buildTxns(rows, result);
+  }
+
+  // Narrow columns wrap their headings ("Paid" over "In(£)"). Fold short
+  // word-only lines just above or below a heading line into it, joining
+  // words that sit over each other.
+  function mergeHeaderLines(lines) {
+    const out = [];
+    const used = new Set();
+    lines.forEach((l, i) => {
+      if (used.has(i)) return;
+      if (!readHeader(l)) { out.push(l); return; }
+      const near = (j) => {
+        const n = lines[j];
+        if (!n || used.has(j) || n.page !== l.page || Math.abs(n.y - l.y) > 16) return false;
+        return n.cells.every((c) => c.text.length <= 14 && !MONEY_RE.test(c.text) && !/\d/.test(c.text));
+      };
+      const cells = l.cells.map((c) => ({ ...c }));
+      for (const j of [i - 1, i + 1]) {
+        if (!near(j)) continue;
+        used.add(j);
+        if (j === i - 1 && out[out.length - 1] === lines[j]) out.pop();
+        for (const c of lines[j].cells) {
+          const hit = cells.find((h) => c.x0 < h.x1 && c.x1 > h.x0);
+          if (hit) {
+            hit.text = j < i ? c.text + ' ' + hit.text : hit.text + ' ' + c.text;
+            hit.x0 = Math.min(hit.x0, c.x0);
+            hit.x1 = Math.max(hit.x1, c.x1);
+          } else cells.push({ ...c });
+        }
+      }
+      cells.sort((a, b) => a.x0 - b.x0);
+      out.push({ ...l, cells });
+    });
+    return out;
   }
 
   // Pass 1: what each line is — a heading, a dated line, amounts, words.
@@ -216,35 +250,44 @@
   }
 
   function buildTxns(rows, result) {
-    // Which amount line does each wrapped text line belong to? The nearer
-    // one: lines of one description sit closer together than separate rows
-    // do. A date marks the start of a row, so nothing attaches across one.
+    // Which amount line does each wrapped text line belong to? Lines of one
+    // description sit closer together than separate rows, so each text line
+    // follows its nearer neighbouring line (and that line's owner). A date
+    // marks the start of a row, so nothing attaches upwards across one.
     const isTxn = (r) => r.kind === 'line' && r.money.length > 0 && !r.skip && !r.noise;
     const txnRows = rows.filter((r) => isTxn(r) && r.words.length);
     const descX = median(txnRows.map((r) => r.words[0].x0));
-    const extra = new Map(); // row index -> { before: [], after: [] }
-    const slot = (j) => { if (!extra.has(j)) extra.set(j, { before: [], after: [] }); return extra.get(j); };
     let seenDate = false;
-    rows.forEach((r, i) => {
+    const isText = rows.map((r) => {
       if (r.kind === 'line' && r.date) seenDate = true;
-      if (r.kind !== 'line' || r.money.length || r.skip || r.noise || !r.words.length || !seenDate) return;
-      if (descX > 0 && r.words[0].x0 < descX - 20 && !r.date) return; // footers, legal text
-      const search = (step) => {
-        for (let j = i + step; j >= 0 && j < rows.length; j += step) {
-          const q = rows[j];
-          if (q.kind !== 'line' || q.skip || q.page !== r.page) return -1;
-          if (step > 0 && q.date) return isTxn(q) && r.date ? j : -1;
-          if (isTxn(q)) return j;
-          if (step < 0 && q.date) return -1;
-        }
-        return -1;
-      };
-      const up = r.date ? -1 : search(-1);
-      const down = search(1);
-      if (up < 0 && down < 0) return;
-      const text = r.words.map((c) => c.text).join(' ');
-      const useUp = down < 0 || (up >= 0 && Math.abs(rows[up].y - r.y) <= Math.abs(rows[down].y - r.y) + 0.5);
-      if (useUp) slot(up).after.push(text); else slot(down).before.push(text);
+      if (r.kind !== 'line' || r.money.length || r.skip || r.noise || !r.words.length || !seenDate) return false;
+      return !(descX > 0 && r.words[0].x0 < descX - 20 && !r.date); // footers, legal text
+    });
+    const linkable = (j, i) => j >= 0 && j < rows.length && rows[j].kind === 'line' && !rows[j].skip && rows[j].page === rows[i].page && (isTxn(rows[j]) || isText[j]);
+    const dir = rows.map((r, i) => {
+      if (!isText[i]) return null;
+      const canUp = !r.date && linkable(i - 1, i);
+      const canDown = linkable(i + 1, i) && !(rows[i + 1].date && !(r.date && isTxn(rows[i + 1])));
+      if (!canUp && !canDown) return null;
+      if (!canDown) return -1;
+      if (!canUp) return 1;
+      const gUp = Math.abs(rows[i - 1].y - r.y);
+      const gDown = Math.abs(r.y - rows[i + 1].y);
+      return gUp <= gDown + 0.5 ? -1 : 1;
+    });
+    const owner = (i, seen) => {
+      if (isTxn(rows[i])) return i;
+      if (!dir[i] || seen.has(i)) return -1;
+      seen.add(i);
+      return owner(i + dir[i], seen);
+    };
+    const extra = new Map(); // row index -> { before: [], after: [] }
+    rows.forEach((r, i) => {
+      if (!isText[i]) return;
+      const o = owner(i, new Set());
+      if (o < 0) return;
+      if (!extra.has(o)) extra.set(o, { before: [], after: [] });
+      extra.get(o)[i < o ? 'before' : 'after'].push(r.words.map((c) => c.text).join(' '));
     });
 
     let date = null;
@@ -255,7 +298,8 @@
       if (r.skip) {
         // "Balance brought forward" seeds the running balance.
         const v = r.money.length ? SC.parseAmount(r.money[r.money.length - 1].text) : null;
-        if (v !== null) lastBalance = v;
+        // Only inside the table: a summary box above it ("New balance") would mislead.
+        if (v !== null && r.cols) lastBalance = v;
         return;
       }
       if (r.noise || !r.money.length) return;
@@ -291,7 +335,7 @@
         const a = Math.abs(amount);
         const asIn = Math.abs(round2(lastBalance + a) - balance) < 0.015;
         const asOut = Math.abs(round2(lastBalance - a) - balance) < 0.015;
-        if (!signKnown && (asIn || asOut)) amount = asIn && !asOut ? a : asOut && !asIn ? -a : amount;
+        if (asIn !== asOut) amount = asIn ? a : -a; // the balance outranks a column guess
         result.balanceChecked++;
         if (Math.abs(round2(lastBalance + amount) - balance) < 0.015) result.balanceOk++;
       } else if (!signKnown) {

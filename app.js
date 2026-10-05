@@ -194,7 +194,8 @@
       <ul class="muted" style="padding-left:18px">
         <li><b>Monzo:</b> Account → Statements → Export → CSV</li>
         <li><b>Starling:</b> Account → Statements → choose dates → CSV</li>
-        <li><b>Barclays, HSBC, Lloyds, NatWest, Santander, Nationwide:</b> sign in on the website → your account → Export / Download transactions → CSV or Excel CSV</li>
+        <li><b>NatWest:</b> in the app, open your account → <b>Statements</b> → pick a month → download the <b>PDF</b> and load it here. For a CSV, sign in to online banking on the website → <b>Statements</b> → <b>Download or export transactions</b> → choose dates → CSV.</li>
+        <li><b>Barclays, HSBC, Lloyds, Santander, Nationwide:</b> sign in on the website → your account → Export / Download transactions → CSV or Excel CSV</li>
         <li><b>Credit cards</b> often show spending as positive numbers — tick “Flip signs” on the import screen.</li>
       </ul>
       <p class="muted"><b>PDF statements</b> work too — the same PDF you'd download from online banking. CSV is the most reliable, and scanned or photographed statements can't be read.</p>
@@ -370,8 +371,8 @@
       const d = new Date(t.date + 'T00:00:00Z');
       html += `<div class="tx" data-cat-txn="${esc(t.id)}" role="button" tabindex="0" aria-label="Set category for ${esc(t.desc)}">
         <div class="d"><b>${d.getUTCDate()}</b>${d.toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'UTC' })}</div>
-        <div class="grow"><div class="ellipsis">${flagged.has(t.id) ? '<span class="sev high" title="Flagged"><i aria-hidden="true"></i></span> ' : ''}${esc(t.desc)}</div>
-          <div class="muted small ellipsis">${catPill(t)} ${esc(SC.titleCase(t.merchant))}${t.balance != null ? ' · bal ' + money(t.balance) : ''}</div></div>
+        <div class="grow"><div class="ellipsis">${flagged.has(t.id) ? '<span class="sev high" title="Flagged"><i aria-hidden="true"></i></span> ' : ''}${esc(SC.titleCase(t.merchant))}</div>
+          <div class="muted small ellipsis">${catPill(t)} ${esc(t.desc)}</div></div>
         <div class="a ${t.amount > 0 ? 'in' : ''}">${money(t.amount, true)}</div>
       </div>`;
     }

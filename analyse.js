@@ -71,9 +71,10 @@
     if (!s) return null;
     let neg = false;
     if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1).trim(); }
-    const drcr = s.match(/\s*(DR|CR|D|C)\.?$/i);
+    // CR/DR, D, and NatWest's OD (overdrawn) after the number.
+    const drcr = s.match(/\s*(DR|CR|OD|D|C)\.?$/i);
     if (drcr && /\d/.test(s.slice(0, drcr.index))) {
-      if (/^d/i.test(drcr[1])) neg = !neg;
+      if (/^[do]/i.test(drcr[1])) neg = !neg;
       s = s.slice(0, drcr.index);
     }
     s = s.replace(/GBP|EUR|USD|AUD|CAD|NZD|[£$€¥\s\u00a0]/gi, '');
@@ -259,7 +260,7 @@
       let desc = map.desc >= 0 ? r[map.desc] || '' : '';
       if (!desc) desc = r.filter((c, i) => i !== map.date && parseAmount(c) === null && c).join(' ') || '(no description)';
       const balance = map.balance >= 0 ? parseAmount(r[map.balance]) : null;
-      txns.push({ date, desc: desc.replace(/\s+/g, ' ').trim(), amount: round2(amount), balance });
+      txns.push({ date, desc: desc.replace(/^'+/, '').replace(/\s+/g, ' ').trim(), amount: round2(amount), balance });
     });
     return { txns, skipped };
   }
@@ -325,12 +326,14 @@
   function round2(n) { return Math.round(n * 100) / 100; }
 
   const PREFIXES = new RegExp(
-    '^(card payment to|card purchase|card transaction|contactless payment|contactless|debit card|visa|pos|' +
+    '^(card payment to|card purchase|debit card transaction|card transaction|contactless payment|contactless|debit card|visa|pos|' +
+    'automated credit|online transaction|online banking|cash withdrawal|' + // NatWest / RBS transaction types
+
     'direct debit( payment)? to|direct debit|standing order to|standing order|bill payment to|bill payment|' +
     'faster payments? (to|from|receipt from|payment to)|faster payments?|payment to|payment from|' +
     'transfer (to|from)|tfr|bacs|bgc|fpi|fpo|dd|so|bp|cpt|chq|purchase|online payment|cash withdrawal at|cash|atm)\\b[\\s:\\-*]*',
   );
-  const NOISE = /\b(gb|gbr|uk|london|ltd|limited|plc|inc|llc|www|com|co|the|ref|reference|card|via|apple pay|google pay|on|at|eur|usd|gbp)\b/g;
+  const NOISE = /\b(gb|gbr|uk|london|ltd|limited|plc|inc|llc|www|com|co|the|ref|reference|card|via|mobile|pymt|apple pay|google pay|on|at|eur|usd|gbp)\b/g;
 
   // A stable grouping key for "who was paid", so "AMAZON* 2K4J1 LONDON" and
   // "AMAZON* 9QQ3B" land together. Deliberately coarse.
@@ -340,7 +343,7 @@
     s = s.replace(/\b\d{1,2}[\s\-/](jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*([\s\-/]\d{2,4})?/g, ' ');
     s = s.replace(/[a-z]*\d[a-z\d]*/g, ' '); // ref codes, card numbers, dates
     s = s.replace(/[^a-z& ]/g, ' ').replace(NOISE, ' ');
-    const words = s.split(/\s+/).filter((w) => w.length > 1).slice(0, 2);
+    const words = [...new Set(s.split(/\s+/).filter((w) => w.length > 1))].slice(0, 2);
     return words.join(' ') || String(desc || '').toLowerCase().trim().slice(0, 24) || 'unknown';
   }
 

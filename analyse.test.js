@@ -129,3 +129,31 @@ test('QIF files', () => {
   assert.ok(SC.looksLikeQIF(qif));
   assert.deepEqual(SC.parseQIF(qif).map((t) => [t.date, t.amount]), [['2026-10-03', -9.99], ['2026-11-03', 1500]]);
 });
+
+test('NatWest CSV export: Value column, apostrophe-prefixed descriptions, type codes', () => {
+  const { cfg, txns } = importCSV(
+    '\nDate, Type, Description, Value, Balance, Account Name, Account Number\n' +
+    "05/03/2026,POS,\"'4637 04MAR26 C , TESCO STORES 3021 , LONDON GB\",-23.10,976.90,'MR A CUSTOMER,'600001-12345678',\n" +
+    "06/03/2026,BAC,\"'ACME LTD SALARY FP 06/03/26 1234\",2450.00,3426.90,'MR A CUSTOMER,'600001-12345678',\n" +
+    "07/03/2026,D/D,\"'OCTOPUS ENERGY\",-118.00,3308.90,'MR A CUSTOMER,'600001-12345678',\n");
+  assert.equal(cfg.map.amount, 3);
+  assert.equal(cfg.map.desc, 2);
+  assert.deepEqual(txns.map((t) => [t.date, t.desc, t.amount, t.balance]), [
+    ['2026-03-05', '4637 04MAR26 C , TESCO STORES 3021 , LONDON GB', -23.1, 976.9],
+    ['2026-03-06', 'ACME LTD SALARY FP 06/03/26 1234', 2450, 3426.9],
+    ['2026-03-07', 'OCTOPUS ENERGY', -118, 3308.9],
+  ]);
+});
+
+test('NatWest transaction types are not mistaken for payees', () => {
+  const key = SC.merchantKey;
+  assert.equal(key('Card Transaction 4637 03MAR26 C , TESCO STORES 3021 , LONDON GB'), 'tesco stores');
+  assert.equal(key('4637 05MAR26 C , TESCO STORES 3021 , LONDON GB'), 'tesco stores');
+  assert.equal(key('Automated Credit ACME LTD SALARY FP 05MAR26 1234'), 'acme salary');
+  assert.notEqual(key('Automated Credit HMRC TAX REFUND'), key('Automated Credit ACME LTD SALARY'));
+  assert.equal(key('OnLine Transaction J SMITH RENT VIA MOBILE - PYMT'), 'smith rent');
+  assert.equal(key('Debit Card Transaction NETFLIX.COM'), 'netflix');
+  assert.equal(key('Cash Withdrawal LLOYDS BANK 05MAR'), 'lloyds bank');
+  assert.equal(SC.parseAmount('1,123.45 OD'), -1123.45);
+  assert.equal(SC.parseAmount('123.45OD'), -123.45);
+});

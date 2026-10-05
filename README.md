@@ -79,9 +79,17 @@ including split *paid in / paid out* columns, preambles, UK/US dates and
 4. Year-less dates ("05 Mar") take their year from the statement, counting back across New Year.
 5. Where there's a running balance, it settles whether an amount was money in or out, and every line is checked against it. The import screen shows the result ("All 56 running balances add up").
 
+**NatWest** (and RBS, which shares its layout) is specifically handled: the
+*Paid In* column comes before *Withdrawn*, narrow headings that wrap ("Paid" /
+"In(£)") are stitched back together, the summary box above the table is
+ignored, descriptions are a type line plus a detail line ("Card Transaction" /
+"4637 03MAR26 C , TESCO STORES 3021 , LONDON GB"), overdrawn balances end in
+"OD", and type labels like "Automated Credit" are never treated as the payee.
+NatWest's CSV export (Value column, apostrophe-prefixed descriptions) works too.
+
 Scanned or photographed statements have no text and can't be read.
 Password-protected PDFs ask for the password, which never leaves the device.
-`test-fixtures/` holds generated fake statements in three layouts, used by
+`test-fixtures/` holds generated fake statements in four layouts (one NatWest-style), used by
 `pdfstatement.test.js`.
 
 ## Putting it on your phone

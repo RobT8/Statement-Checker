@@ -52,3 +52,10 @@ test('PDF: the running balance decides in or out when the columns do not', () =>
 test('PDF: a scanned statement with no text is recognised as such', () => {
   assert.equal(PDFS.parseStatement([{ items: [] }]).scanned, true);
 });
+
+test('PDF: NatWest layout — Paid In before Withdrawn, wrapped headings, type + detail lines, OD balances', async () => {
+  const r = await readPdf('layout-d.pdf');
+  assert.deepEqual(simple(r.txns), expected('layout-d'));
+  assert.ok(r.txns.some((t) => t.balance < 0), 'an overdrawn (OD) balance was read as negative');
+  assert.equal(r.balanceOk, r.balanceChecked);
+});

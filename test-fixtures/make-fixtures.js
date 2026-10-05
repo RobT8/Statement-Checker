@@ -114,10 +114,62 @@ function layoutC() {
   return { html, expected: expected(txns) };
 }
 
+// D: NatWest layout (fake bank name and data). Summary box above the
+// table; Paid In BEFORE Withdrawn; BROUGHT FORWARD row; two-line
+// descriptions (type, then details) with the amount on the first line;
+// balance on the last transaction of each day; overdrawn shown as "OD";
+// legal footer on every page.
+function layoutD() {
+  const nw = (p, d) => {
+    const ddmmmyy = `${String(d.getUTCDate()).padStart(2, '0')}${MON[d.getUTCMonth()].toUpperCase()}${String(d.getUTCFullYear()).slice(2)}`;
+    const card = (m) => ['Card Transaction', `4637 ${ddmmmyy} C , ${m}`];
+    return {
+      'TESCO STORES 3021': card('TESCO STORES 3021 , LONDON GB'),
+      'DD OCTOPUS ENERGY': ['Direct Debit', 'OCTOPUS ENERGY 12345678'],
+      'CARD PAYMENT TO AMAZON': card('AMAZON* AB12C3D4E , AMAZON.CO.UK GB'),
+      'SHELL PETROL': card('SHELL PETROL , READING GB'),
+      'NETFLIX.COM': card('NETFLIX.COM , AMSTERDAM NL'),
+      'COSTA COFFEE': card('COSTA COFFEE , LONDON GB'),
+      'FASTER PAYMENT TO J SMITH': ['OnLine Transaction', 'J SMITH RENT VIA MOBILE - PYMT'],
+      'SAINSBURYS S/MKT': ['Cash Withdrawal', 'LLOYDS BANK 06MAR'],
+      'ACME LTD SALARY': ['Automated Credit', `ACME LTD SALARY FP ${ddmmmyy} 1234`],
+    }[p[0]];
+  };
+  const start = new Date(Date.UTC(2026, 2, 1));
+  const txns = makeTxns(start, 45, 150).map((t) => ({ ...t, lines: nw(t.lines, t.date) }));
+  const byDay = new Map();
+  for (const t of txns) {
+    const k = iso(t.date);
+    if (!byDay.has(k)) byDay.set(k, []);
+    byDay.get(k).push(t);
+  }
+  const od = (n) => money(n) + (n < 0 ? ' OD' : '');
+  let rows = '';
+  for (const list of byDay.values()) {
+    list.forEach((t, i) => {
+      const d = t.date;
+      const day = i === 0 ? `${String(d.getUTCDate()).padStart(2, '0')} ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}` : '';
+      rows += `<tr style="vertical-align:top"><td style="white-space:nowrap">${day}</td><td>${t.lines.join('<br>')}</td>
+        <td class="n">${t.amount > 0 ? money(t.amount) : ''}</td><td class="n">${t.amount < 0 ? money(t.amount) : ''}</td>
+        <td class="n">${i === list.length - 1 ? od(t.balance) : ''}</td></tr>`;
+    });
+  }
+  const paidIn = txns.filter((t) => t.amount > 0).reduce((a, t) => a + t.amount, 0);
+  const out = txns.filter((t) => t.amount < 0).reduce((a, t) => a - t.amount, 0);
+  const html = `<style>${css}</style><h1>Example Bank</h1><p>Select Account &nbsp; Sort Code 60-00-01 &nbsp; Account No 12345678</p>
+    <p>Period: 01 Mar 2026 to 14 Apr 2026</p>
+    <table style="width:60%;margin-bottom:12px"><tr><td>Previous Balance</td><td class="n">£150.00</td><td>Paid In</td><td class="n">£${money(paidIn)}</td>
+      <td>Withdrawn</td><td class="n">£${money(out)}</td><td>New Balance</td><td class="n">£${od(txns[txns.length - 1].balance)}</td></tr></table>
+    <table><thead><tr><th>Date</th><th>Description</th><th class="n">Paid In(£)</th><th class="n">Withdrawn(£)</th><th class="n">Balance(£)</th></tr></thead>
+    <tbody><tr><td>01 Mar 2026</td><td>BROUGHT FORWARD</td><td></td><td></td><td class="n">150.00</td></tr>${rows}</tbody></table>
+    <div class="foot">Example Bank Plc. Registered Office: 1 Example Street, London EC2M 4AA. Registered in England and Wales No. 929027.</div>`;
+  return { html, expected: expected(txns) };
+}
+
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  for (const [name, make] of [['layout-a', layoutA], ['layout-b', layoutB], ['layout-c', layoutC]]) {
+  for (const [name, make] of [['layout-a', layoutA], ['layout-b', layoutB], ['layout-c', layoutC], ['layout-d', layoutD]]) {
     const { html, expected: exp } = make();
     await page.setContent(html);
     await page.pdf({ path: path.join(__dirname, name + '.pdf'), format: 'A4', margin: { top: '15mm', bottom: '15mm', left: '12mm', right: '12mm' } });

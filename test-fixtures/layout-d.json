@@ -1,0 +1,202 @@
+[
+ {
+  "date": "2026-03-01",
+  "desc": "Card Transaction 4637 01MAR26 C , NETFLIX.COM , AMSTERDAM NL",
+  "amount": -55.6
+ },
+ {
+  "date": "2026-03-02",
+  "desc": "Card Transaction 4637 02MAR26 C , TESCO STORES 3021 , LONDON GB",
+  "amount": -59.74
+ },
+ {
+  "date": "2026-03-02",
+  "desc": "Direct Debit OCTOPUS ENERGY 12345678",
+  "amount": -102.02
+ },
+ {
+  "date": "2026-03-04",
+  "desc": "Card Transaction 4637 04MAR26 C , AMAZON* AB12C3D4E , AMAZON.CO.UK GB",
+  "amount": -55.89
+ },
+ {
+  "date": "2026-03-06",
+  "desc": "Card Transaction 4637 06MAR26 C , NETFLIX.COM , AMSTERDAM NL",
+  "amount": -115.87
+ },
+ {
+  "date": "2026-03-07",
+  "desc": "Automated Credit ACME LTD SALARY FP 07MAR26 1234",
+  "amount": 2450
+ },
+ {
+  "date": "2026-03-10",
+  "desc": "OnLine Transaction J SMITH RENT VIA MOBILE - PYMT",
+  "amount": -92.88
+ },
+ {
+  "date": "2026-03-10",
+  "desc": "Card Transaction 4637 10MAR26 C , NETFLIX.COM , AMSTERDAM NL",
+  "amount": -111.63
+ },
+ {
+  "date": "2026-03-11",
+  "desc": "Card Transaction 4637 11MAR26 C , TESCO STORES 3021 , LONDON GB",
+  "amount": -43.44
+ },
+ {
+  "date": "2026-03-11",
+  "desc": "OnLine Transaction J SMITH RENT VIA MOBILE - PYMT",
+  "amount": -95.84
+ },
+ {
+  "date": "2026-03-15",
+  "desc": "Card Transaction 4637 15MAR26 C , TESCO STORES 3021 , LONDON GB",
+  "amount": -82.54
+ },
+ {
+  "date": "2026-03-17",
+  "desc": "Card Transaction 4637 17MAR26 C , AMAZON* AB12C3D4E , AMAZON.CO.UK GB",
+  "amount": -27.31
+ },
+ {
+  "date": "2026-03-17",
+  "desc": "Card Transaction 4637 17MAR26 C , AMAZON* AB12C3D4E , AMAZON.CO.UK GB",
+  "amount": -37.52
+ },
+ {
+  "date": "2026-03-20",
+  "desc": "Card Transaction 4637 20MAR26 C , COSTA COFFEE , LONDON GB",
+  "amount": -112.67
+ },
+ {
+  "date": "2026-03-21",
+  "desc": "Direct Debit OCTOPUS ENERGY 12345678",
+  "amount": -48.63
+ },
+ {
+  "date": "2026-03-21",
+  "desc": "Automated Credit ACME LTD SALARY FP 21MAR26 1234",
+  "amount": 2450
+ },
+ {
+  "date": "2026-03-23",
+  "desc": "Card Transaction 4637 23MAR26 C , COSTA COFFEE , LONDON GB",
+  "amount": -102.27
+ },
+ {
+  "date": "2026-03-23",
+  "desc": "Direct Debit OCTOPUS ENERGY 12345678",
+  "amount": -1339.59
+ },
+ {
+  "date": "2026-03-26",
+  "desc": "Cash Withdrawal LLOYDS BANK 06MAR",
+  "amount": -40.39
+ },
+ {
+  "date": "2026-03-27",
+  "desc": "Card Transaction 4637 27MAR26 C , SHELL PETROL , READING GB",
+  "amount": -93.53
+ },
+ {
+  "date": "2026-03-27",
+  "desc": "Cash Withdrawal LLOYDS BANK 06MAR",
+  "amount": -82.92
+ },
+ {
+  "date": "2026-03-29",
+  "desc": "Card Transaction 4637 29MAR26 C , TESCO STORES 3021 , LONDON GB",
+  "amount": -24.33
+ },
+ {
+  "date": "2026-03-29",
+  "desc": "Card Transaction 4637 29MAR26 C , NETFLIX.COM , AMSTERDAM NL",
+  "amount": -101.75
+ },
+ {
+  "date": "2026-03-30",
+  "desc": "Card Transaction 4637 30MAR26 C , COSTA COFFEE , LONDON GB",
+  "amount": -55.53
+ },
+ {
+  "date": "2026-04-01",
+  "desc": "Card Transaction 4637 01APR26 C , AMAZON* AB12C3D4E , AMAZON.CO.UK GB",
+  "amount": -120.47
+ },
+ {
+  "date": "2026-04-03",
+  "desc": "OnLine Transaction J SMITH RENT VIA MOBILE - PYMT",
+  "amount": -22.44
+ },
+ {
+  "date": "2026-04-03",
+  "desc": "Card Transaction 4637 03APR26 C , NETFLIX.COM , AMSTERDAM NL",
+  "amount": -98.65
+ },
+ {
+  "date": "2026-04-04",
+  "desc": "Cash Withdrawal LLOYDS BANK 06MAR",
+  "amount": -48.2
+ },
+ {
+  "date": "2026-04-04",
+  "desc": "Card Transaction 4637 04APR26 C , AMAZON* AB12C3D4E , AMAZON.CO.UK GB",
+  "amount": -37.19
+ },
+ {
+  "date": "2026-04-04",
+  "desc": "Automated Credit ACME LTD SALARY FP 04APR26 1234",
+  "amount": 2450
+ },
+ {
+  "date": "2026-04-05",
+  "desc": "Card Transaction 4637 05APR26 C , NETFLIX.COM , AMSTERDAM NL",
+  "amount": -111.22
+ },
+ {
+  "date": "2026-04-05",
+  "desc": "Card Transaction 4637 05APR26 C , SHELL PETROL , READING GB",
+  "amount": -106.27
+ },
+ {
+  "date": "2026-04-06",
+  "desc": "Card Transaction 4637 06APR26 C , SHELL PETROL , READING GB",
+  "amount": -78.88
+ },
+ {
+  "date": "2026-04-06",
+  "desc": "Card Transaction 4637 06APR26 C , TESCO STORES 3021 , LONDON GB",
+  "amount": -20.86
+ },
+ {
+  "date": "2026-04-10",
+  "desc": "Card Transaction 4637 10APR26 C , SHELL PETROL , READING GB",
+  "amount": -7.16
+ },
+ {
+  "date": "2026-04-10",
+  "desc": "Card Transaction 4637 10APR26 C , SHELL PETROL , READING GB",
+  "amount": -96.57
+ },
+ {
+  "date": "2026-04-11",
+  "desc": "Direct Debit OCTOPUS ENERGY 12345678",
+  "amount": -24.16
+ },
+ {
+  "date": "2026-04-11",
+  "desc": "Card Transaction 4637 11APR26 C , COSTA COFFEE , LONDON GB",
+  "amount": -53.37
+ },
+ {
+  "date": "2026-04-13",
+  "desc": "Card Transaction 4637 13APR26 C , SHELL PETROL , READING GB",
+  "amount": -99.55
+ },
+ {
+  "date": "2026-04-14",
+  "desc": "Card Transaction 4637 14APR26 C , SHELL PETROL , READING GB",
+  "amount": -24.75
+ }
+]
