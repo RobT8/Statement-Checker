@@ -71,15 +71,19 @@ including split *paid in / paid out* columns, preambles, UK/US dates and
 
 ## Putting it on your phone
 
-It has to be served over HTTPS once, so it can install and then work offline:
+**Live app: https://robt8.github.io/Statement-Checker/**
 
-1. Host this folder anywhere static, e.g. GitHub Pages, Netlify Drop or Cloudflare Pages.
-2. Open the URL on your phone.
-   - **Android (Chrome):** ⋮ menu → *Add to Home screen* / *Install app*
+It's hosted on GitHub Pages from the `main` branch, so every push to `main`
+updates it within a minute or two.
+
+1. Open the link on your phone.
+   - **Android (Chrome):** ⋮ menu → *Install app* (or *Add to Home screen*)
    - **iPhone (Safari):** Share → *Add to Home Screen*
-3. Open it from the home screen. After the first load it works with no connection.
+2. Open it from the home screen. After the first load it works with no connection.
 
-Hosting only serves the app's code. Statements you load are read on the phone and stored there.
+Hosting only serves the app's code. Statements you load are read on the phone
+and stored there. When an update is published, the app picks it up the next
+time it's opened online.
 
 ## Development
 
