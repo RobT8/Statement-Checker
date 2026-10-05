@@ -1,6 +1,6 @@
 // Caches the app's own files so it opens with no connection. It never sees
 // statement data: files are read in the page and stored in localStorage.
-const CACHE = 'statement-check-v2';
+const CACHE = 'statement-check-v3';
 const FILES = ['./', 'index.html', 'app.js', 'analyse.js', 'categorise.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
 
 self.addEventListener('install', (e) => {

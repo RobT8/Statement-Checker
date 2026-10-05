@@ -23,7 +23,26 @@ local storage.
 | Balance doesn't add up | running balance breaks, so a line may be missing or edited |
 | Spending spike | a month's spending far above your typical month |
 
-Each alert can be marked "It's fine", and stays hidden after that.
+| Category up this month | a spending category is at least 50% and £50 above its usual month (needs 3+ months) |
+
+Each alert can be marked **It's fine** (this one alert) or **Never for <payee>**
+(stop that check for that payee, e.g. your daily coffee isn't a duplicate).
+Both can be undone from the bottom of the Alerts screen.
+
+## Fixing mistakes
+
+Tap any transaction, then **Edit details** to correct its date, description,
+amount or direction, or delete it. Edits and deletions stick when the same
+statement is loaded again, because the transaction keeps its original identity.
+
+Renaming the **payee** fixes grouping: give "AMZN MKTP" the name "Amazon
+Marketplace" to merge it with your other Amazon payments, or rename one payment
+to split it out. Renaming all of a payee's payments carries its category rules
+and "never flag" choices over, and remembers the alias for future imports.
+
+**Check guessed payees** walks through every payee whose category is only a
+learned guess: one tap to confirm, or pick the right one. Every correction
+retrains the guesses.
 
 ## Categories that learn
 

@@ -11,7 +11,8 @@
 
   // ------------------------------------------------------------- state ----
 
-  let db = { imports: [], txns: [], dismissed: {}, settings: { currency: 'GBP' }, cats: CAT.freshState() };
+  const blank = () => ({ imports: [], txns: [], dismissed: {}, mutes: {}, aliases: {}, deleted: {}, settings: { currency: 'GBP' }, cats: CAT.freshState() });
+  let db = blank();
   let result = null;
   let cats = new Map(); // txn id -> { cat, source, confidence }
   let tab = 'alerts';
@@ -22,6 +23,7 @@
       const raw = localStorage.getItem(KEY);
       if (raw) db = Object.assign(db, JSON.parse(raw));
       if (!db.cats || !Array.isArray(db.cats.list)) db.cats = CAT.freshState();
+      for (const k of ['mutes', 'aliases', 'deleted']) if (!db[k]) db[k] = {};
     } catch { /* private mode or blocked storage: start empty */ }
     try { const t = localStorage.getItem(KEY + '.tab'); if (t) tab = t; } catch { /* ignore */ }
   }
@@ -38,15 +40,20 @@
 
   function reanalyse() {
     result = SC.analyse(db.txns, { format: money, formatDate: niceDate });
+    result.basePatterns = result.patterns;
     recategorise();
+  }
+
+  // Categories feed the alerts, so any category change re-runs that part.
+  function recategorise() {
+    cats = CAT.categorise(db.txns, db.cats);
+    if (!result) return;
+    result.patterns = result.basePatterns.concat(CAT.categorySpikes(db.txns, cats, db.cats.list,
+      { format: money, monthName: SC.monthName, titleCase: SC.titleCase }));
     const n = visibleAlerts().length;
     const badge = $('#alert-badge');
     badge.hidden = !n;
     badge.textContent = n > 99 ? '99+' : n;
-  }
-
-  function recategorise() {
-    cats = CAT.categorise(db.txns, db.cats);
   }
 
   // ----------------------------------------------------------- helpers ----
@@ -105,7 +112,7 @@
     if (!result) return [];
     const out = [];
     for (const f of result.flags) {
-      const live = f.reasons.filter((r) => !db.dismissed[r.key]);
+      const live = f.reasons.filter((r) => !isOff(r, f.txn));
       const reasons = ui.showDismissed ? f.reasons : live;
       if (!reasons.length) continue;
       const severity = reasons.reduce((s, r) => (SEV_RANK[r.severity] > SEV_RANK[s] ? r.severity : s), 'low');
@@ -119,13 +126,18 @@
     return out.sort((a, b) => SEV_RANK[b.severity] - SEV_RANK[a.severity] || (a.date < b.date ? 1 : -1));
   }
 
+  // Marked fine once, or "never flag this payee for this" (a mute).
+  function isOff(r, t) {
+    return !!(db.dismissed[r.key] || db.mutes[r.rule + '|' + t.merchant]);
+  }
+
   function visibleAlerts() {
     return allAlerts().filter((a) => !a.dismissed);
   }
 
   function dismissedCount() {
     if (!result) return 0;
-    return result.flags.filter((f) => f.reasons.every((r) => db.dismissed[r.key])).length +
+    return result.flags.filter((f) => f.reasons.every((r) => isOff(r, f.txn))).length +
       result.patterns.filter((p) => db.dismissed[p.id]).length;
   }
 
@@ -220,6 +232,11 @@
     return html;
   }
 
+  function shortName(merchant) {
+    const n = SC.titleCase(merchant);
+    return n.length > 16 ? n.slice(0, 15) + '…' : n;
+  }
+
   function daysSpan(a, b) { return Math.round((Date.parse(b) - Date.parse(a)) / 86400000) + 1; }
 
   function alertCard(a) {
@@ -232,12 +249,14 @@
         <div class="actions">
           ${a.dismissed ? `<button class="btn small" data-undismiss="${esc(p.id)}">Undo “fine”</button>` : `<button class="btn small" data-dismiss="${esc(p.id)}">It's fine</button>`}
           ${p.merchant ? `<button class="btn small" data-merchant="${esc(p.merchant)}">See history</button>` : ''}
-          ${p.month ? `<button class="btn small" data-month="${esc(p.month)}">See month</button>` : ''}
+          ${p.cat ? `<button class="btn small" data-catmonth="${esc(p.cat + '|' + p.month)}">See payments</button>`
+            : p.month ? `<button class="btn small" data-month="${esc(p.month)}">See month</button>` : ''}
         </div>
       </div>`;
     }
     const t = a.txn;
     const keys = a.reasons.map((r) => r.key).join('\n');
+    const mutes = a.reasons.map((r) => r.rule + '|' + t.merchant).join('\n');
     return `<div class="card alert ${a.severity}">
       <div class="row"><div class="grow">${sevTag(a.severity)}</div><div class="muted small nowrap">${niceDate(t.date)}</div></div>
       <div class="row" style="margin-top:6px">
@@ -245,10 +264,13 @@
           <div class="muted small ellipsis">${esc(t.desc)}</div></div>
         <div class="amt ${t.amount > 0 ? 'in' : ''}">${money(t.amount, true)}</div>
       </div>
+      <div class="small" style="margin-top:4px"><button class="linkish" data-cat-txn="${esc(t.id)}" aria-label="Change category">${catPill(t)}</button>
+      </div>
       <ul>${a.reasons.map((r) => `<li><b>${esc(r.title)}</b><span>${esc(r.detail)}</span></li>`).join('')}</ul>
       <div class="actions">
-        ${a.dismissed ? `<button class="btn small" data-undismiss="${esc(keys)}">Undo “fine”</button>` : `<button class="btn small" data-dismiss="${esc(keys)}">It's fine</button>`}
-        <button class="btn small" data-merchant="${esc(t.merchant)}">See history</button>
+        ${a.dismissed ? `<button class="btn small" data-undismiss="${esc(keys)}" data-unmute="${esc(mutes)}">Undo “fine”</button>` : `<button class="btn small" data-dismiss="${esc(keys)}">It's fine</button>
+        <button class="btn small" data-mute="${esc(mutes)}" title="Stop flagging ${esc(SC.titleCase(t.merchant))} for this">Never for ${esc(shortName(t.merchant))}</button>`}
+        <button class="btn small" data-merchant="${esc(t.merchant)}">History</button>
       </div>
     </div>`;
   }
@@ -278,9 +300,11 @@
     const none = n - you - guess;
     const pct = (x) => Math.round((x / n) * 100);
     const toSort = CAT.payeesToSort(db.txns, db.cats, cats).length;
+    const toReview = CAT.guessesToReview(db.txns, cats).length;
     return `<div class="card" style="padding:12px 14px">
       <div class="row"><b class="grow">Categories</b>
         ${toSort ? `<button class="btn primary small" data-act="sort">Sort ${toSort} payee${toSort === 1 ? '' : 's'}</button>` : '<span class="small muted">All sorted ✓</span>'}</div>
+      ${toReview ? `<button class="btn small block" data-act="review" style="margin-top:8px">Check ${toReview} guessed payee${toReview === 1 ? '' : 's'}</button>` : ''}
       <div class="stack" role="img" aria-label="${pct(you)}% set by you, ${pct(guess)}% guessed, ${pct(none)}% not categorised">
         <div style="width:${(you / n) * 100}%;background:var(--series-in)"></div><div style="width:${(guess / n) * 100}%;background:var(--series-in-light)"></div>
       </div>
@@ -693,6 +717,7 @@
       <label class="check"><input type="checkbox" id="always" checked> Use for all ${samePayee > 1 ? samePayee + ' ' : ''}${dir === 'out' ? 'payments to' : 'money from'} ${esc(name)} — and future ones</label>
       <div class="row" style="margin-top:8px">
         ${info.source === 'manual' || info.source === 'payee' ? '<button class="btn grow" data-x="clear">Clear category</button>' : ''}
+        <button class="btn grow" data-x="edit">Edit details</button>
         <button class="btn grow" data-x="close">Close</button>
       </div>`);
     sh.el.addEventListener('click', (e) => {
@@ -712,22 +737,100 @@
         delete db.cats.txnCats[t.id];
         if (always) delete db.cats.payeeCats[key];
         save(); recategorise(); sh.close();
-      } else if (b.dataset.x === 'close') sh.close();
+      } else if (b.dataset.x === 'edit') { sh.close(); openEditor(t.id); }
+      else if (b.dataset.x === 'close') sh.close();
     });
+  }
+
+  // Fix what the statement or the app got wrong. The id is left alone, so
+  // importing the same statement again doesn't bring the original back.
+  function openEditor(id) {
+    const t = db.txns.find((x) => x.id === id);
+    if (!t) return;
+    const name = SC.titleCase(t.merchant);
+    const same = db.txns.filter((x) => x.merchant === t.merchant).length;
+    const out = t.amount < 0;
+    const sh = openSheet(`
+      <h2>Edit transaction</h2>
+      <p class="sub">Fix anything that's wrong. Your changes stick, even if you load the same statement again.</p>
+      <div class="map-grid">
+        <label for="e-date">Date</label><input type="date" id="e-date" class="field" value="${esc(t.date)}">
+        <label for="e-desc">Description</label><input id="e-desc" class="field" maxlength="200" value="${esc(t.desc)}">
+        <label for="e-amt">Amount</label>
+        <div class="row"><select id="e-dir" class="field" style="width:auto" aria-label="Direction">
+            <option value="out" ${out ? 'selected' : ''}>Out</option><option value="in" ${out ? '' : 'selected'}>In</option></select>
+          <input id="e-amt" class="field grow" type="number" inputmode="decimal" step="0.01" min="0.01" value="${Math.abs(t.amount).toFixed(2)}"></div>
+        <label for="e-payee">Payee</label><input id="e-payee" class="field" maxlength="60" value="${esc(name)}">
+      </div>
+      <p class="small muted">The payee groups payments for alerts, history and categories. Rename it to merge payees the app split up — e.g. give “Amzn Mktp” the name “Amazon Marketplace”.</p>
+      ${same > 1 ? `<label class="check"><input type="checkbox" id="e-all" checked> Rename all ${same} payments from ${esc(name)}, and future imports</label>` : ''}
+      <div class="row" style="margin-top:10px">
+        <button class="btn danger" data-x="delete">Delete</button>
+        <button class="btn grow" data-x="close">Cancel</button>
+        <button class="btn primary grow" data-x="save">Save</button>
+      </div>`);
+    sh.el.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-x]');
+      if (!b) return;
+      if (b.dataset.x === 'close') return sh.close();
+      if (b.dataset.x === 'delete') {
+        if (!confirm('Delete this transaction? It stays deleted if you import the statement again.')) return;
+        db.deleted[t.id] = Date.now();
+        db.txns = db.txns.filter((x) => x.id !== t.id);
+        save(); reanalyse(); sh.close();
+        return toast('Transaction deleted.');
+      }
+      const date = $('#e-date', sh.el).value;
+      const amt = parseFloat($('#e-amt', sh.el).value);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return toast('Enter a valid date.');
+      if (!(amt > 0)) return toast('Enter an amount above zero.');
+      t.date = date;
+      t.amount = Math.round(amt * 100) / 100 * ($('#e-dir', sh.el).value === 'out' ? -1 : 1);
+      t.desc = $('#e-desc', sh.el).value.trim().replace(/\s+/g, ' ') || t.desc;
+      t.edited = true;
+      const newKey = $('#e-payee', sh.el).value.trim().toLowerCase().replace(/\s+/g, ' ');
+      if (newKey && newKey !== t.merchant) renamePayee(t, newKey, same === 1 || $('#e-all', sh.el).checked);
+      save(); reanalyse(); sh.close();
+      toast('Saved.');
+    });
+  }
+
+  // Renaming everywhere carries the payee's category rules and "never flag"
+  // choices across, and records an alias so future imports follow it.
+  function renamePayee(t, newKey, all) {
+    const old = t.merchant;
+    if (!all) { t.merchant = newKey; return; }
+    for (const x of db.txns) if (x.merchant === old) x.merchant = newKey;
+    for (const k of Object.keys(db.aliases)) if (db.aliases[k] === old) db.aliases[k] = newKey;
+    db.aliases[old] = newKey;
+    for (const k of Object.keys(db.aliases)) if (db.aliases[k] === k) delete db.aliases[k];
+    for (const dir of ['out', 'in']) {
+      const from = dir + '|' + old;
+      const to = dir + '|' + newKey;
+      if (db.cats.payeeCats[from]) {
+        if (!db.cats.payeeCats[to]) db.cats.payeeCats[to] = db.cats.payeeCats[from];
+        delete db.cats.payeeCats[from];
+      }
+    }
+    for (const k of Object.keys(db.mutes)) {
+      const i = k.indexOf('|');
+      if (k.slice(i + 1) === old) { db.mutes[k.slice(0, i + 1) + newKey] = db.mutes[k]; delete db.mutes[k]; }
+    }
   }
 
   // Walk through uncategorised payees, biggest first. Each answer retrains
   // the guesses, so later suggestions get better as you go.
-  function openSort() {
+  function openSort(mode) {
+    const review = mode === 'review';
     const skipped = new Set();
     let done = 0;
     const sh = openSheet('<div id="sort-body"></div>');
     const body = $('#sort-body', sh.el);
     const step = () => {
-      const queue = CAT.payeesToSort(db.txns, db.cats, cats).filter((g) => !skipped.has(g.key));
+      const queue = (review ? CAT.guessesToReview(db.txns, cats) : CAT.payeesToSort(db.txns, db.cats, cats)).filter((g) => !skipped.has(g.key));
       if (!queue.length) {
         body.innerHTML = `<div class="empty" style="padding:20px 0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m8 12 3 3 5-6"/></svg>
-          <p><b>${done ? `${done} payee${done === 1 ? '' : 's'} sorted.` : 'Nothing left to sort.'}</b><br>New statements will be categorised automatically from what you've taught it.</p></div>
+          <p><b>${done ? `${done} payee${done === 1 ? '' : 's'} ${review ? 'checked' : 'sorted'}.` : `Nothing left to ${review ? 'check' : 'sort'}.`}</b><br>New statements will be categorised automatically from what you've taught it.</p></div>
           <button class="btn primary block" data-x="close">Done</button>`;
         return;
       }
@@ -735,13 +838,15 @@
       const sample = g.txns[0];
       const guess = cats.get(sample.id);
       const gc = guess.source === 'guess' ? catById(guess.cat) : null;
-      body.innerHTML = `<p class="small muted" style="margin:0">${done} sorted · ${queue.length} to go · each answer teaches the app</p>
+      body.innerHTML = `<p class="small muted" style="margin:0">${review ? 'Checking the app’s guesses' : 'Sorting payees'} · ${done} done · ${queue.length} to go · each answer teaches the app</p>
         <div class="card">
           <div class="small muted">${g.dir === 'out' ? 'Money out to' : 'Money in from'}</div>
           <div style="font-size:20px;font-weight:700">${esc(SC.titleCase(g.merchant))}</div>
           <div class="muted small">${g.txns.length} payment${g.txns.length === 1 ? '' : 's'} · ${money(g.total)} total · e.g. “${esc(sample.desc)}”</div>
           ${gc ? `<div class="small" style="margin-top:8px">🧠 Suggested: <b>${esc(gc.icon + ' ' + gc.name)}</b> <span class="muted">(${Math.round(guess.confidence * 100)}% sure)</span></div>` : ''}
         </div>
+        ${review && gc ? `<button class="btn primary block" data-pick="${esc(gc.id)}" style="margin-top:4px">✓ Yes, ${esc(gc.name)}</button>
+          <p class="small muted" style="margin:12px 0 0">Wrong? Pick the right one:</p>` : ''}
         ${catGrid(g.dir, null, gc ? gc.id : null)}
         <div class="row" style="margin-top:12px">
           <button class="btn grow" data-x="skip">Skip</button>
@@ -801,10 +906,12 @@
     const importId = 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const existing = new Set(db.txns.map((t) => t.id));
     const fresh = [];
+    let removed = 0;
     SC.assignIds(parsed).forEach((t, seq) => {
-      if (!existing.has(t.id)) fresh.push({ ...t, importId, seq });
+      if (db.deleted[t.id]) { removed++; return; }
+      if (!existing.has(t.id)) fresh.push({ ...t, merchant: db.aliases[t.merchant] || t.merchant, importId, seq });
     });
-    const dupes = parsed.length - fresh.length;
+    const dupes = parsed.length - fresh.length - removed;
     const dates = parsed.map((t) => t.date).sort();
     db.imports.push({ id: importId, name, count: fresh.length, dupes, from: dates[0], to: dates[dates.length - 1], added: new Date().toISOString() });
     db.txns.push(...fresh);
@@ -823,8 +930,9 @@
         return;
       }
       if (db.txns.length && !confirm('Replace everything on this device with the backup?')) return;
-      db = { imports: data.imports || [], txns: data.txns, dismissed: data.dismissed || {}, settings: data.settings || { currency: 'GBP' },
-        cats: data.cats && Array.isArray(data.cats.list) ? data.cats : CAT.freshState() };
+      db = Object.assign(blank(), data);
+      delete db.app; delete db.version; delete db.saved;
+      if (!db.cats || !Array.isArray(db.cats.list)) db.cats = CAT.freshState();
       save();
       reanalyse();
       toast('Backup restored.');
@@ -854,8 +962,19 @@
       save(); reanalyse(); render();
       return toast('Marked as fine.');
     }
+    if (d.mute) {
+      d.mute.split('\n').forEach((k) => { db.mutes[k] = Date.now(); });
+      save(); recategorise(); render();
+      return toast("Won't flag this payee for that again. Undo at the bottom of Alerts.");
+    }
+    if (d.catmonth) {
+      const [c, m] = d.catmonth.split('|');
+      ui.cat = c; ui.q = m; ui.txFilter = 'out';
+      return go('transactions');
+    }
     if (d.undismiss) {
       d.undismiss.split('\n').forEach((k) => { delete db.dismissed[k]; });
+      (d.unmute || '').split('\n').forEach((k) => { delete db.mutes[k]; });
       save(); reanalyse(); return render();
     }
     if (d.catTxn) return openPicker(d.catTxn);
@@ -885,6 +1004,7 @@
       case 'chart-table': ui.chartTable = !ui.chartTable; render(); break;
       case 'backup': backup(); break;
       case 'sort': openSort(); break;
+      case 'review': openSort('review'); break;
       case 'export-csv': exportCSV(); break;
       case 'add-cat': {
         const name = ($('#new-cat-name').value || '').trim().slice(0, 40);
@@ -901,7 +1021,7 @@
         break;
       case 'wipe':
         if (!confirm('Delete every statement and setting from this device? This cannot be undone.')) return;
-        db = { imports: [], txns: [], dismissed: {}, settings: db.settings, cats: CAT.freshState() };
+        db = Object.assign(blank(), { settings: db.settings });
         save(); reanalyse(); render(); toast('All data deleted.');
         break;
     }

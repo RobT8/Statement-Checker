@@ -69,3 +69,37 @@ test('the sort queue lists uncategorised payees, biggest first', () => {
   const q = CAT.payeesToSort(txns, st, CAT.categorise(txns, st));
   assert.deepEqual(q.map((g) => [g.merchant, g.txns.length]), [['rent', 1], ['costa', 2]]);
 });
+
+test('category spending alerts: a jump against your usual month', () => {
+  const rows = [];
+  for (const m of ['04', '05', '06', '07']) {
+    rows.push(tx('DELIVEROO', -25, `2026-${m}-03`), tx('DELIVEROO', -25, `2026-${m}-17`), tx('DELIVEROO', -50, `2026-${m}-24`));
+    rows.push(tx('TESCO STORES', -200, `2026-${m}-10`));
+  }
+  rows.push(tx('NOBU RESTAURANT', -260, '2026-07-12'));
+  const txns = build(rows);
+  const st = CAT.freshState();
+  st.payeeCats['out|deliveroo'] = 'eating-out';
+  st.payeeCats['out|tesco stores'] = 'groceries';
+  st.payeeCats['out|nobu restaurant'] = 'eating-out';
+  const alerts = CAT.categorySpikes(txns, CAT.categorise(txns, st), st.list);
+  assert.deepEqual(alerts.map((a) => [a.id, a.severity]), [['catspike|eating-out|2026-07', 'medium']]);
+  assert.match(alerts[0].detail, /£360\.00 .*usual £100\.00/);
+});
+
+test('category spending alerts need three months and ignore rare categories', () => {
+  const st = CAT.freshState();
+  st.payeeCats['out|easyjet'] = 'holidays';
+  const two = build([tx('EASYJET', -100, '2026-04-01'), tx('EASYJET', -900, '2026-05-01')]);
+  assert.deepEqual(CAT.categorySpikes(two, CAT.categorise(two, st), st.list), []);
+  const rare = build([tx('EASYJET', -100, '2026-04-01'), tx('X', -1, '2026-05-01'), tx('EASYJET', -900, '2026-07-01')]);
+  assert.deepEqual(CAT.categorySpikes(rare, CAT.categorise(rare, st), st.list), [], 'a usual month of zero is no baseline');
+});
+
+test('guesses are grouped by payee for review', () => {
+  const txns = build([tx('TESCO STORES', -40), tx('TESCO STORES', -52, '2026-03-08'), tx('TESCO EXPRESS', -8), tx('TESCO EXPRESS', -9, '2026-03-05')]);
+  const st = CAT.freshState();
+  st.payeeCats['out|tesco stores'] = 'groceries';
+  const g = CAT.guessesToReview(txns, CAT.categorise(txns, st));
+  assert.deepEqual(g.map((x) => [x.merchant, x.cat, x.txns.length]), [['tesco express', 'groceries', 2]]);
+});

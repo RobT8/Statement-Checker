@@ -156,7 +156,7 @@
     .tile .k { font-size: 12px; color: var(--text2); }
     .tile .v { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-    input[type="search"], select { width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 10px 12px; }
+    input[type="search"], select, .field { width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 10px 12px; }
     .tx { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
     .tx:last-child { border-bottom: 0; }
     .tx .d { width: 34px; text-align: center; font-size: 12px; color: var(--text2); line-height: 1.1; }
@@ -198,6 +198,8 @@
     .pill.guess { background: none; border: 1px dashed var(--text3); color: var(--text2); }
     .pill.none { background: none; color: var(--accent); padding-left: 0; }
     .tx[data-cat-txn] { cursor: pointer; }
+    .linkish { background: none; border: 0; padding: 0; }
+    .field { min-width: 0; }
     .cat-grid { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
     .cat-grid .chip { font-size: 15px; padding: 8px 12px; }
     .chip.suggested { border: 2px dashed var(--accent); }

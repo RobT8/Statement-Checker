@@ -162,11 +162,96 @@
     return [...groups.values()].sort((a, b) => b.total - a.total);
   }
 
+  function median(xs) {
+    if (!xs.length) return 0;
+    const s = [...xs].sort((a, b) => a - b);
+    const m = s.length >> 1;
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  }
+
+  function monthsBetween(first, last) {
+    const out = [];
+    let [y, m] = first.split('-').map(Number);
+    const [ly, lm] = last.split('-').map(Number);
+    while (y < ly || (y === ly && m <= lm)) {
+      out.push(`${y}-${String(m).padStart(2, '0')}`);
+      if (++m > 12) { m = 1; y++; }
+    }
+    return out;
+  }
+
+  // A spending category's month compared with its usual month. "Usual" is the
+  // median of every other month in the data, counting months with nothing in
+  // that category as zero — so a category you rarely use never looks "usual".
+  function categorySpikes(txns, catMap, list, options) {
+    const opts = options || {};
+    const fmt = opts.format || ((n) => '£' + Math.abs(n).toFixed(2));
+    const monthName = opts.monthName || ((m) => m);
+    const titleCase = opts.titleCase || ((x) => x);
+    if (!txns.length) return [];
+    const dates = txns.map((t) => t.date).sort();
+    const months = monthsBetween(dates[0].slice(0, 7), dates[dates.length - 1].slice(0, 7));
+    if (months.length < 3) return [];
+    const byId = new Map(list.map((c) => [c.id, c]));
+    const spend = new Map();
+    for (const t of txns) {
+      if (t.amount >= 0) continue;
+      const info = catMap.get(t.id);
+      const c = info && info.cat ? byId.get(info.cat) : null;
+      if (!c || c.type !== 'out') continue;
+      if (!spend.has(c.id)) spend.set(c.id, new Map());
+      const m = t.date.slice(0, 7);
+      const cell = spend.get(c.id).get(m) || { total: 0, txns: [], guessed: 0 };
+      cell.total += -t.amount;
+      cell.txns.push(t);
+      if (info.source === 'guess') cell.guessed++;
+      spend.get(c.id).set(m, cell);
+    }
+    const out = [];
+    for (const [id, byMonth] of spend) {
+      const c = byId.get(id);
+      const totals = months.map((m) => (byMonth.get(m) || { total: 0 }).total);
+      months.forEach((m, i) => {
+        const v = totals[i];
+        const typical = median(totals.filter((_, j) => j !== i));
+        if (typical <= 0 || v < typical * 1.5 || v - typical < 50) return;
+        const cell = byMonth.get(m);
+        const top = [...cell.txns].sort((a, b) => a.amount - b.amount).slice(0, 3);
+        out.push({
+          id: `catspike|${id}|${m}`,
+          severity: v >= typical * 2.5 ? 'medium' : 'low',
+          title: `${c.icon} ${c.name} up in ${monthName(m)}`,
+          detail: `${fmt(v)} on ${c.name.toLowerCase()} — ${Math.round((v / typical - 1) * 100)}% more than your usual ${fmt(typical)} a month. ` +
+            `Biggest: ${top.map((t) => `${titleCase(t.merchant)} ${fmt(t.amount)}`).join(', ')}.` +
+            (cell.guessed ? ` ${cell.guessed} of these ${cell.guessed === 1 ? 'was' : 'were'} categorised by a learned guess — check them if this looks wrong.` : ''),
+          cat: id,
+          month: m,
+        });
+      });
+    }
+    return out;
+  }
+
+  // Payees whose category is only a learned guess, for the review screen.
+  function guessesToReview(txns, catMap) {
+    const groups = new Map();
+    for (const t of txns) {
+      const info = catMap.get(t.id);
+      if (info.source !== 'guess') continue;
+      const key = payeeKey(t);
+      if (!groups.has(key)) groups.set(key, { key, merchant: t.merchant, dir: direction(t), txns: [], total: 0, cat: info.cat, confidence: info.confidence });
+      const g = groups.get(key);
+      g.txns.push(t);
+      g.total += Math.abs(t.amount);
+    }
+    return [...groups.values()].sort((a, b) => b.total - a.total);
+  }
+
   function slug(name) {
     return 'c-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24) + '-' + Math.random().toString(36).slice(2, 6);
   }
 
-  const api = { DEFAULT_CATEGORIES, MIN_CONFIDENCE, freshState, direction, payeeKey, allows, features, train, predict, categorise, payeesToSort, slug };
+  const api = { DEFAULT_CATEGORIES, MIN_CONFIDENCE, freshState, direction, payeeKey, allows, features, train, predict, categorise, payeesToSort, categorySpikes, guessesToReview, slug };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CAT = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
