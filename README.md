@@ -65,6 +65,14 @@ categories and export everything, with categories, to a CSV spreadsheet.
 
 ## Formats
 
+Load one statement or many at once (long-press a file in the phone's picker
+to select several). A batch gets one review screen: each file shows ✅ when
+its running balances all add up, ℹ️ when it can't be verified, ⚠️ when some
+don't add up and ❌ when it can't be read. Files can be left out or checked
+individually, and transactions already loaded, or repeated across
+overlapping statements, are skipped.
+
+
 CSV (column layout is auto-detected and shown for checking before import,
 including split *paid in / paid out* columns, preambles, UK/US dates and
 `1.234,56` amounts), OFX/QFX, QIF and PDF.

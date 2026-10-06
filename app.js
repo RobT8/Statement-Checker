@@ -172,7 +172,8 @@
     return `<div class="drop" id="drop">
       ${UPLOAD_ICON}
       <p style="margin:8px 0 14px"><b>Load a bank statement</b><br><span class="muted small">PDF, CSV, OFX, QFX or QIF — downloaded from your banking app or website</span></p>
-      <button class="btn primary" data-act="pick">Choose file</button>
+      <button class="btn primary" data-act="pick">Choose files</button>
+      <p class="small muted" style="margin:10px 0 0">Several months at once? Long-press a file in the picker, then tap the others.</p>
     </div>`;
   }
 
@@ -593,19 +594,149 @@
 
   // ------------------------------------------------------------ import ----
 
+  // One file: its own review screen. Several: read them all, then one
+  // screen for the batch.
   async function handleFiles(files) {
-    for (const file of files) {
-      const name = file.name || 'statement';
-      if (/\.(xlsx?|numbers)$/i.test(name)) { toast('Save the spreadsheet as CSV first, then load that.'); continue; }
-      if (file.size > 20 * 1024 * 1024) { toast(`${name} is too big (over 20 MB).`); continue; }
-      if (/\.pdf$/i.test(name) || file.type === 'application/pdf') { await importPdf(file); continue; }
-      const text = await file.text();
-      if (SC.looksLikeOFX(text)) { commit(name, SC.parseOFX(text)); continue; }
-      if (SC.looksLikeQIF(text)) { commit(name, SC.parseQIF(text)); continue; }
-      const rows = SC.parseCSV(text);
-      if (!rows.length) { toast(`${name} looks empty.`); continue; }
-      await mappingSheet(name, rows);
+    if (files.length > 1) return batchImport(files);
+    if (/\.pdf$/i.test(files[0].name || '')) toast(`Reading ${files[0].name}…`);
+    const e = await readFile(files[0]);
+    const t = $('.toast');
+    if (t && t.textContent.startsWith('Reading ')) t.remove();
+    if (e.status === 'error') return toast(`${e.name}: ${e.note}`);
+    let txns = e.txns;
+    if (e.kind === 'pdf') txns = await pdfSheet(e.name, e.parsed);
+    else if (e.kind === 'csv') txns = await mappingSheet(e.name, e.rows);
+    if (txns) commit(e.name, txns);
+  }
+
+  // Reads and parses a file without any screens (bar a PDF password prompt).
+  // status: ok (verified), info (looks right, can't be verified), warn
+  // (something doesn't add up), error (can't be used).
+  async function readFile(file) {
+    const name = file.name || 'statement';
+    const e = { name, kind: '', status: 'error', note: '', txns: [] };
+    if (/\.(xlsx?|numbers)$/i.test(name)) { e.note = 'save the spreadsheet as CSV first'; return e; }
+    if (file.size > 20 * 1024 * 1024) { e.note = 'too big (over 20 MB)'; return e; }
+    if (/\.pdf$/i.test(name) || file.type === 'application/pdf') {
+      e.kind = 'pdf';
+      const pages = await readPdfPages(file, name);
+      if (pages === 'cancelled') { e.note = 'password not entered'; return e; }
+      if (!pages) { e.note = "couldn't be opened as a PDF"; return e; }
+      const parsed = PDFS.parseStatement(pages);
+      e.parsed = parsed;
+      if (parsed.scanned) { e.note = 'a scanned image with no text, so it can’t be read'; return e; }
+      if (!parsed.txns.length) { e.note = 'no transactions found'; return e; }
+      e.txns = parsed.txns;
+      if (!parsed.balanceChecked) { e.status = 'info'; e.note = 'no running balance to check against'; }
+      else if (parsed.balanceOk === parsed.balanceChecked) { e.status = 'ok'; e.note = `all ${parsed.balanceChecked} balances add up`; }
+      else { e.status = 'warn'; e.note = `${parsed.balanceChecked - parsed.balanceOk} of ${parsed.balanceChecked} balances don't add up`; }
+      return e;
     }
+    const text = await file.text();
+    if (SC.looksLikeOFX(text) || SC.looksLikeQIF(text)) {
+      e.kind = 'ofx';
+      e.txns = SC.looksLikeOFX(text) ? SC.parseOFX(text) : SC.parseQIF(text);
+      e.status = e.txns.length ? 'ok' : 'error';
+      e.note = e.txns.length ? 'read directly from the file' : 'no transactions found';
+      return e;
+    }
+    e.kind = 'csv';
+    e.rows = SC.parseCSV(text);
+    if (!e.rows.length) { e.note = 'looks empty'; return e; }
+    const res = SC.applyMapping(e.rows, SC.guessMapping(e.rows));
+    e.txns = res.txns;
+    if (!e.txns.length) { e.status = 'warn'; e.note = "columns not recognised — tap Check to pick them"; return e; }
+    e.status = 'info';
+    e.note = `columns detected automatically${res.skipped ? `, ${res.skipped} rows skipped` : ''}`;
+    return e;
+  }
+
+  const STATUS_ICON = { ok: '✅', info: 'ℹ️', warn: '⚠️', error: '❌' };
+
+  async function batchImport(files) {
+    const entries = [];
+    const bg = document.createElement('div');
+    bg.className = 'sheet-bg';
+    bg.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="batch-title">
+      <h2 id="batch-title">Import ${files.length} statements</h2><div id="batch-body"><p class="muted">Reading…</p></div></div>`;
+    document.body.appendChild(bg);
+    const sheet = $('.sheet', bg);
+    const body = $('#batch-body', sheet);
+    let closed = false;
+    const close = () => { closed = true; bg.remove(); popBack = null; };
+    popBack = close;
+
+    for (let i = 0; i < files.length; i++) {
+      body.innerHTML = `<p class="muted">Reading ${i + 1} of ${files.length}: ${esc(files[i].name)}…</p>`;
+      const e = await readFile(files[i]);
+      e.include = e.status !== 'error' && e.txns.length > 0;
+      entries.push(e);
+      if (closed) return;
+    }
+
+    const draw = () => {
+      // What would be new: skip what's already loaded, and overlaps within the batch.
+      const seen = new Set(db.txns.map((t) => t.id));
+      let fresh = 0;
+      let dupes = 0;
+      const dates = [];
+      for (const e of entries) {
+        e.fresh = 0;
+        if (!e.include) continue;
+        for (const t of SC.assignIds(e.txns)) {
+          if (db.deleted[t.id]) continue;
+          if (seen.has(t.id)) dupes++; else { seen.add(t.id); fresh++; e.fresh++; dates.push(t.date); }
+        }
+      }
+      dates.sort();
+      const n = entries.filter((e) => e.include).length;
+      body.innerHTML = `
+        <div class="card" style="padding:4px 14px">${entries.map((e, i) => {
+          const d = e.txns.map((t) => t.date).sort();
+          return `<div class="tx" style="align-items:flex-start">
+            <div style="font-size:20px;line-height:1.2" aria-hidden="true">${STATUS_ICON[e.status]}</div>
+            <div class="grow"><div class="ellipsis"><b>${esc(e.name)}</b></div>
+              <div class="small muted">${e.txns.length ? `${e.txns.length} transactions · ${niceDate(d[0])} – ${niceDate(d[d.length - 1])} · ` : ''}${esc(e.note)}${e.checked ? ' · checked by you' : ''}${e.include && e.txns.length && !e.fresh ? ' · <b>all already loaded</b>' : ''}</div>
+              ${e.status !== 'error' ? `<div class="row" style="margin-top:6px;gap:12px">
+                <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-include="${i}" ${e.include ? 'checked' : ''} ${e.txns.length ? '' : 'disabled'}> Include</label>
+                ${e.kind === 'pdf' || e.kind === 'csv' ? `<button class="btn small" data-check="${i}">${e.kind === 'csv' ? 'Check columns' : 'Check'}</button>` : ''}
+              </div>` : ''}
+            </div>
+          </div>`;
+        }).join('')}</div>
+        <p class="small" style="margin:10px 0">${fresh
+          ? `<b>${fresh} new transactions</b>${dates.length ? ` · ${niceDate(dates[0])} – ${niceDate(dates[dates.length - 1])}` : ''}${dupes ? ` · ${dupes} already loaded or overlapping, will be skipped` : ''}`
+          : 'Nothing new to import.'}</p>
+        ${entries.some((e) => e.include && e.status === 'warn') ? '<p class="small muted" style="margin:0 0 10px">⚠️ Files with balances that don’t add up can still be imported — the lines involved show up as alerts, and you can fix them with Edit details.</p>' : ''}
+        <div class="row">
+          <button class="btn grow" data-x="cancel">Cancel</button>
+          <button class="btn primary grow" data-x="ok" ${fresh ? '' : 'disabled'}>Import ${n} file${n === 1 ? '' : 's'}</button>
+        </div>`;
+    };
+    draw();
+
+    sheet.addEventListener('change', (ev) => {
+      const i = ev.target.dataset.include;
+      if (i !== undefined) { entries[+i].include = ev.target.checked; draw(); }
+    });
+    sheet.addEventListener('click', async (ev) => {
+      const b = ev.target.closest('button');
+      if (!b) return;
+      if (b.dataset.check !== undefined) {
+        const e = entries[+b.dataset.check];
+        const txns = e.kind === 'pdf' ? await pdfSheet(e.name, e.parsed) : await mappingSheet(e.name, e.rows);
+        popBack = close;
+        if (txns) { e.txns = txns; e.include = txns.length > 0; e.checked = true; if (e.status === 'warn' && e.kind === 'csv') e.status = 'info'; }
+        return draw();
+      }
+      if (b.dataset.x === 'cancel') return close();
+      if (b.dataset.x === 'ok') {
+        const chosen = entries.filter((e) => e.include && e.txns.length).map((e) => ({ name: e.name, txns: e.txns }));
+        close();
+        commitMany(chosen);
+      }
+    });
+    bg.addEventListener('click', (ev) => { if (ev.target === bg) close(); });
   }
 
   // ---------------------------------------------------------------- PDF ----
@@ -619,10 +750,7 @@
     return pdfjsLib;
   }
 
-  async function importPdf(file) {
-    const name = file.name || 'statement.pdf';
-    toast(`Reading ${name}…`);
-    let pages;
+  async function readPdfPages(file, name) {
     try {
       const pdfjs = await loadPdfjs();
       const data = new Uint8Array(await file.arrayBuffer());
@@ -630,30 +758,22 @@
       for (;;) {
         const task = pdfjs.getDocument({ data: data.slice(), password, isEvalSupported: false, verbosity: 0 });
         try {
-          const doc = await task.promise;
-          pages = await PDFS.pagesFromPdf(doc);
+          const pages = await PDFS.pagesFromPdf(await task.promise);
           await task.destroy();
-          break;
+          return pages;
         } catch (err) {
           await task.destroy();
           if (err && err.name === 'PasswordException') {
-            password = prompt(err.code === 2 ? 'Wrong password — try again:' : `${name} is password protected. Enter its password (it stays on this device):`);
-            if (password === null) return;
+            password = prompt(err.code === 2 ? `Wrong password for ${name} — try again:` : `${name} is password protected. Enter its password (it stays on this device):`);
+            if (password === null) return 'cancelled';
             continue;
           }
           throw err;
         }
       }
     } catch {
-      toast(`Couldn't open ${name} as a PDF.`);
-      return;
+      return null;
     }
-    const parsed = PDFS.parseStatement(pages);
-    if (parsed.scanned) { toast(`${name} is a scanned image with no text in it, so it can't be read. Try downloading the statement again as a PDF or CSV from online banking.`); return; }
-    if (!parsed.txns.length) { toast(`No transactions found in ${name}. If your bank offers CSV export, try that instead.`); return; }
-    const t = $('.toast');
-    if (t) t.remove();
-    await pdfSheet(name, parsed);
   }
 
   // What was read, and how sure we are: a statement with a running balance
@@ -696,12 +816,14 @@
       };
       $('#p-flip', sheet).addEventListener('change', (e) => { flip = e.target.checked; preview(); });
       preview();
-      const close = () => { bg.remove(); popBack = null; resolve(); };
+      let result = null;
+      const prevBack = popBack;
+      const close = () => { bg.remove(); popBack = prevBack; resolve(result); };
       popBack = close;
       sheet.addEventListener('click', (e) => {
         const x = e.target.closest('[data-x]');
         if (!x) return;
-        if (x.dataset.x === 'ok') commit(name, current());
+        if (x.dataset.x === 'ok') result = current();
         close();
       });
       bg.addEventListener('click', (e) => { if (e.target === bg) close(); });
@@ -759,12 +881,14 @@
       };
       sheet.addEventListener('change', preview);
       preview();
-      const close = () => { bg.remove(); popBack = null; resolve(); };
+      let result = null;
+      const prevBack = popBack;
+      const close = () => { bg.remove(); popBack = prevBack; resolve(result); };
       popBack = close;
       sheet.addEventListener('click', (e) => {
         const x = e.target.closest('[data-x]');
         if (!x) return;
-        if (x.dataset.x === 'ok') commit(name, read().txns);
+        if (x.dataset.x === 'ok') result = read().txns;
         close();
       });
       bg.addEventListener('click', (e) => { if (e.target === bg) close(); });
@@ -1004,22 +1128,38 @@
   });
 
   function commit(name, parsed) {
-    if (!parsed.length) { toast(`No transactions found in ${name}.`); return; }
-    const importId = 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const existing = new Set(db.txns.map((t) => t.id));
-    const fresh = [];
-    let removed = 0;
-    SC.assignIds(parsed).forEach((t, seq) => {
-      if (db.deleted[t.id]) { removed++; return; }
-      if (!existing.has(t.id)) fresh.push({ ...t, merchant: db.aliases[t.merchant] || t.merchant, importId, seq });
-    });
-    const dupes = parsed.length - fresh.length - removed;
-    const dates = parsed.map((t) => t.date).sort();
-    db.imports.push({ id: importId, name, count: fresh.length, dupes, from: dates[0], to: dates[dates.length - 1], added: new Date().toISOString() });
-    db.txns.push(...fresh);
+    commitMany([{ name, txns: parsed }]);
+  }
+
+  // Adds files' transactions, skipping any already loaded (overlapping
+  // statements) or deleted by you, then reports once.
+  function commitMany(files) {
+    let added = 0;
+    let dupes = 0;
+    let filesAdded = 0;
+    for (const f of files) {
+      if (!f.txns.length) continue;
+      const importId = 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const existing = new Set(db.txns.map((t) => t.id));
+      const fresh = [];
+      let removed = 0;
+      SC.assignIds(f.txns).forEach((t, seq) => {
+        if (db.deleted[t.id]) { removed++; return; }
+        if (!existing.has(t.id)) fresh.push({ ...t, merchant: db.aliases[t.merchant] || t.merchant, importId, seq });
+      });
+      const d = f.txns.length - fresh.length - removed;
+      dupes += d;
+      if (!fresh.length) continue; // nothing new: don't list an empty import
+      const dates = f.txns.map((t) => t.date).sort();
+      db.imports.push({ id: importId, name: f.name, count: fresh.length, dupes: d, from: dates[0], to: dates[dates.length - 1], added: new Date().toISOString() });
+      db.txns.push(...fresh);
+      added += fresh.length;
+      filesAdded++;
+    }
+    if (!files.some((f) => f.txns.length)) { toast('No transactions found.'); return; }
     save();
     reanalyse();
-    toast(`Loaded ${fresh.length} transaction${fresh.length === 1 ? '' : 's'}${dupes ? ` (${dupes} already loaded)` : ''}.`);
+    toast(`Loaded ${added} transaction${added === 1 ? '' : 's'}${filesAdded > 1 ? ` from ${filesAdded} files` : ''}${dupes ? ` (${dupes} already loaded, skipped)` : ''}.`);
     go('alerts');
   }
 
