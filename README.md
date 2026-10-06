@@ -67,6 +67,23 @@ the app's storage. A 6-digit code has a million combinations, so a determined
 attacker who copied the encrypted data off the phone could eventually try
 them all. The phone's own screen lock and encryption remain the first line.
 
+## Monthly reminder
+
+Statements → **Monthly reminder**: pick a day (1st–28th or the last day) and a
+time. On that day a banner at the top of the app says it's time to load your
+statement, with **Load statement** and **Remind me tomorrow**. It clears
+itself once a statement is loaded (loading up to 10 days early counts).
+
+- **Phone notification:** when the app is installed to the home screen, Chrome
+  wakes it now and then (Periodic Background Sync, roughly twice a day at most)
+  and it shows one notification for the month. Chrome picks the timing, so it
+  can arrive some hours after the set time. No server or push service is used.
+- **Add to my calendar** downloads a repeating `.ics` event with an alarm, for
+  phones that won't show the notification.
+- The reminder settings (day, hour, when a statement was last loaded) are kept
+  outside the encrypted data so the service worker can read them; they hold no
+  statement contents.
+
 ## Categories that learn
 
 Tap any transaction to give it a category, or use **Sort payees** to work
@@ -146,6 +163,6 @@ python3 -m http.server 8000   # then open http://localhost:8000
 node --test                   # engine tests (run from this folder)
 ```
 
-`analyse.js` is the pure parsing and detection engine, `categorise.js` the category learning, `pdfstatement.js` the PDF reader and `lock.js` the app lock's encryption, shared by the page and
+`analyse.js` is the pure parsing and detection engine, `categorise.js` the category learning, `pdfstatement.js` the PDF reader `lock.js` the app lock's encryption and `remind.js` the reminder dates, shared by the page and
 the tests. `app.js` is the UI. `sw.js` caches the app's own files for offline use.
 Bump `CACHE` in `sw.js` when you change any file.

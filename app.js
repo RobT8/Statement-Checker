@@ -6,9 +6,16 @@
   const CAT = window.CAT;
   const PDFS = window.PDFS;
   const LOCK = window.LOCK;
+  const REMIND = window.REMIND;
   const ENC_KEY = 'statement-check.v1.enc';
   const META_KEY = 'statement-check.v1.lock';
   const KEY = 'statement-check.v1';
+  // Reminder settings sit outside the (possibly encrypted) data so the
+  // service worker can read a copy. They hold only the day, hour and when a
+  // statement was last loaded — no statement contents.
+  const REMIND_KEY = KEY + '.remind';
+  const REMIND_CACHE = 'statement-check-remind';
+  const REMIND_URL = './__remind.json';
   const $ = (sel, el) => (el || document).querySelector(sel);
   const view = $('#view');
   const fileInput = $('#file-input');
@@ -20,7 +27,7 @@
   let result = null;
   let cats = new Map(); // txn id -> { cat, source, confidence }
   let tab = 'alerts';
-  const ui = { sev: 'all', showDismissed: false, q: '', txFilter: 'all', cat: '', txLimit: 300, chartTable: false };
+  const ui = { sev: 'all', showDismissed: false, q: '', txFilter: 'all', cat: '', txLimit: 300, chartTable: false, notify: '' };
 
   function adopt(data) {
     db = Object.assign(blank(), data || {});
@@ -73,6 +80,59 @@
       if (lockMeta) localStorage.setItem(META_KEY, JSON.stringify(lockMeta));
       else localStorage.removeItem(META_KEY);
     } catch { /* ignore */ }
+  }
+
+  let remind = readRemind();
+
+  function readRemind() {
+    try {
+      const r = JSON.parse(localStorage.getItem(REMIND_KEY) || 'null');
+      if (r && typeof r === 'object') return Object.assign({ day: null, hour: 9, lastImport: 0, snoozeUntil: 0, notified: '' }, r);
+    } catch { /* ignore */ }
+    return { day: null, hour: 9, lastImport: 0, snoozeUntil: 0, notified: '' };
+  }
+
+  function writeRemind() {
+    try { localStorage.setItem(REMIND_KEY, JSON.stringify(remind)); } catch { /* ignore */ }
+    syncRemind();
+  }
+
+  // Copy the settings where the service worker can see them, keeping the
+  // month it last notified for (it records that on its side).
+  async function syncRemind() {
+    if (!('caches' in window)) return;
+    try {
+      const cache = await caches.open(REMIND_CACHE);
+      const old = await cache.match(REMIND_URL);
+      const theirs = old ? await old.json() : null;
+      if (theirs && (theirs.notified || '') > (remind.notified || '')) {
+        remind.notified = theirs.notified;
+        try { localStorage.setItem(REMIND_KEY, JSON.stringify(remind)); } catch { /* ignore */ }
+      }
+      await cache.put(REMIND_URL, new Response(JSON.stringify(remind), { headers: { 'Content-Type': 'application/json' } }));
+    } catch { /* ignore: the in-app banner still works */ }
+  }
+
+  // Ask for notifications and the twice-a-day background wake-up. Sets
+  // ui.notify to what the phone allows: on, ask, blocked, no-install or unsupported.
+  async function setupNotifications(ask) {
+    const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : null;
+    if (!reg || !('periodicSync' in reg) || !('Notification' in window)) { ui.notify = 'unsupported'; return; }
+    if (remind.day == null) {
+      ui.notify = '';
+      try { await reg.periodicSync.unregister('statement-reminder'); } catch { /* ignore */ }
+      return;
+    }
+    if (Notification.permission === 'default' && ask) await Notification.requestPermission();
+    if (Notification.permission === 'default') { ui.notify = 'ask'; return; }
+    if (Notification.permission !== 'granted') { ui.notify = 'blocked'; return; }
+    let state = 'denied';
+    try { state = (await navigator.permissions.query({ name: 'periodic-background-sync' })).state; } catch { /* ignore */ }
+    if (state !== 'granted') { ui.notify = 'no-install'; return; }
+    try {
+      await reg.periodicSync.register('statement-reminder', { minInterval: 12 * 60 * 60 * 1000 });
+      ui.notify = 'on';
+    } catch { ui.notify = 'no-install'; }
   }
 
   function reanalyse() {
@@ -199,10 +259,10 @@
       else b.removeAttribute('aria-current');
     });
     if (!db.txns.length && tab !== 'files') {
-      view.innerHTML = welcome();
+      view.innerHTML = reminderBanner() + welcome();
       return;
     }
-    view.innerHTML = ({ alerts: renderAlerts, transactions: renderTransactions, insights: renderInsights, files: renderFiles })[tab]();
+    view.innerHTML = reminderBanner() + ({ alerts: renderAlerts, transactions: renderTransactions, insights: renderInsights, files: renderFiles })[tab]();
     if (tab === 'insights') wireChart();
   }
 
@@ -229,6 +289,47 @@
         <span class="muted">Files are read by this app inside your browser and saved only on this device. Nothing is uploaded — the app is blocked from making network requests at all.</span>
       </div>
       ${howToExport()}`;
+  }
+
+  function reminderBanner() {
+    const now = Date.now();
+    if (!REMIND.isDue(remind, now)) return '';
+    // Seen in the app, so the phone needn't notify about this month as well.
+    const month = REMIND.monthKey(REMIND.lastDue(remind, now));
+    if (remind.notified !== month) { remind.notified = month; writeRemind(); }
+    return `<div class="card remind-banner" id="remind-banner" role="status">
+      <p style="margin:0 0 10px">📅 <b>Time to load your bank statement</b><br>
+        <span class="small muted">Download this month's statement from your bank, then load it here.</span></p>
+      <div class="row" style="flex-wrap:wrap"><button class="btn primary small" data-act="pick">Load statement</button>
+        <button class="btn small" data-act="remind-snooze">Remind me tomorrow</button></div>
+    </div>`;
+  }
+
+  function reminderCard() {
+    const r = remind;
+    const days = [['', 'Off']].concat(Array.from({ length: 28 }, (_, i) => [String(i + 1), REMIND.ordinal(i + 1)]), [['last', 'Last day']]);
+    const hours = [7, 8, 9, 12, 17, 18, 20, 21];
+    const cur = r.day == null ? '' : String(r.day);
+    const note = {
+      on: '🔔 Your phone will show a notification on the day. Chrome decides exactly when to check, so it can arrive a few hours late.',
+      blocked: "🔕 Notifications are blocked for this app, so you'll see the reminder when you open it. To allow them: long-press the app icon → App info → Notifications.",
+      'no-install': "You'll see the reminder when you open the app. For a notification too, use the app from your home screen (installed) — or add it to your calendar below.",
+      unsupported: "This browser can't show notifications for this app, so you'll see the reminder when you open it — or add it to your calendar below.",
+      ask: "You'll see the reminder when you open the app. <button class=\"btn ghost small\" data-act=\"remind-notify\">Also notify me on my phone</button>",
+    }[ui.notify] || '';
+    return `<h3>Monthly reminder</h3>
+      <div class="card">
+        <p class="small muted" style="margin:0 0 10px">A nudge each month to download your statement and load it here. It goes away once you've loaded one.</p>
+        <div class="row">
+          <div class="grow"><label class="small muted" for="remind-day">Day</label>
+            <select id="remind-day" style="margin-top:4px">${days.map(([v, l]) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+          <div class="grow"><label class="small muted" for="remind-hour">Time</label>
+            <select id="remind-hour" style="margin-top:4px" ${r.day == null ? 'disabled' : ''}>${hours.map((h) => `<option value="${h}" ${h === +r.hour ? 'selected' : ''}>${REMIND.hourLabel(h)}</option>`).join('')}</select></div>
+        </div>
+        ${r.day == null ? '' : `<p class="small" style="margin:12px 0 0">Next: <b>${REMIND.nextDue(r, Date.now()).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}, ${REMIND.hourLabel(r.hour)}</b> <span class="muted">— ${REMIND.describe(r)}</span></p>
+          ${note ? `<p class="small muted" style="margin:8px 0 0">${note}</p>` : ''}
+          <button class="btn small" data-act="remind-ics" style="margin-top:10px">Add to my calendar</button>`}
+      </div>`;
   }
 
   function howToExport() {
@@ -597,6 +698,7 @@
           <button class="btn small" data-act="export-csv" ${db.txns.length ? '' : 'disabled'}>Export to spreadsheet (CSV)</button>
         </div>
       </div>
+      ${reminderCard()}
       ${lockCard()}
       ${categoryManager()}
       <div class="card small">
@@ -1202,6 +1304,9 @@
       filesAdded++;
     }
     if (!files.some((f) => f.txns.length)) { toast('No transactions found.'); return; }
+    remind.lastImport = Date.now();
+    remind.snoozeUntil = 0;
+    writeRemind();
     save();
     reanalyse();
     toast(`Loaded ${added} transaction${added === 1 ? '' : 's'}${filesAdded > 1 ? ` from ${filesAdded} files` : ''}${dupes ? ` (${dupes} already loaded, skipped)` : ''}.`);
@@ -1297,6 +1402,16 @@
       case 'sort': openSort(); break;
       case 'review': openSort('review'); break;
       case 'export-csv': exportCSV(); break;
+      case 'remind-snooze':
+        remind.snoozeUntil = REMIND.snoozeTime(remind, Date.now());
+        writeRemind(); render();
+        toast(`OK — I'll remind you tomorrow at ${REMIND.hourLabel(remind.hour)}.`);
+        break;
+      case 'remind-notify': setupNotifications(true).then(render); break;
+      case 'remind-ics':
+        download(REMIND.icsEvent(remind, Date.now()), 'text/calendar', 'statement-reminder.ics');
+        toast('Open the downloaded file to add it to your calendar.');
+        break;
       case 'add-cat': {
         const name = ($('#new-cat-name').value || '').trim().slice(0, 40);
         if (!name) return toast('Type a name first.');
@@ -1333,6 +1448,21 @@
   document.addEventListener('change', (e) => {
     if (e.target.id === 'cat-filter') { ui.cat = e.target.value; ui.txLimit = 300; return render(); }
     if (e.target.id === 'lock-timeout') { lockMeta.timeout = +e.target.value; writeMeta(); return toast('Saved.'); }
+    if (e.target.id === 'remind-day' || e.target.id === 'remind-hour') {
+      const wasOff = remind.day == null;
+      const v = $('#remind-day').value;
+      remind.day = v === '' ? null : v === 'last' ? 'last' : +v;
+      remind.hour = +$('#remind-hour').value;
+      // Count from now, so switching it on doesn't nag about last month.
+      if (wasOff && remind.day != null) remind.lastImport = Math.max(remind.lastImport, Date.now());
+      remind.snoozeUntil = 0;
+      writeRemind();
+      render();
+      if (remind.day == null) { setupNotifications(false); return toast('Reminder off.'); }
+      toast(`I'll remind you on ${REMIND.describe(remind)}.`);
+      setupNotifications(wasOff).then(() => { if (tab === 'files' && $('#remind-day')) render(); });
+      return;
+    }
     if (e.target.id === 'currency') { db.settings.currency = e.target.value; save(); reanalyse(); render(); }
   });
 
@@ -1617,6 +1747,7 @@
     } else {
       document.body.classList.remove('privacy');
       if (lockMeta && cryptoKey && Date.now() - hiddenAt >= lockMeta.timeout) lockNow();
+      else if ((!lockMeta || cryptoKey) && !$('#remind-banner') && REMIND.isDue(remind, Date.now())) render();
     }
   });
 
@@ -1629,6 +1760,9 @@
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.register('sw.js')
+      .then(() => { syncRemind(); return setupNotifications(false); })
+      .then(() => { if (tab === 'files' && $('#remind-day') && (!lockMeta || cryptoKey)) render(); })
+      .catch(() => {});
   }
 })();

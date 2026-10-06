@@ -27,8 +27,8 @@ dates) and like visual explanations and analogies.
    vendored (pdf.js lives in `vendor/pdfjs`).
 2. **No build step.** Plain HTML/CSS/JS files served as-is. Pure logic files
    use a UMD-style footer: `module.exports` under Node, a global in the
-   browser (`SC`, `CAT`, `PDFS`, `LOCK`).
-3. **Bump `CACHE` in `sw.js`** (currently `statement-check-v7`) whenever any
+   browser (`SC`, `CAT`, `PDFS`, `LOCK`, `REMIND`).
+3. **Bump `CACHE` in `sw.js`** (currently `statement-check-v8`) whenever any
    file changes, and add new files to its `FILES` list, or installed copies
    keep the old version and break offline.
 4. **Escape everything from statements** with `esc()` before it goes into
@@ -46,8 +46,9 @@ dates) and like visual explanations and analogies.
 | `categorise.js` (`CAT`) | Categories: per-transaction > payee rule > naive Bayes guess; `categorySpikes`, `payeesToSort`, `guessesToReview` |
 | `pdfstatement.js` (`PDFS`) | Rebuilds statement tables from pdf.js text positions |
 | `lock.js` (`LOCK`) | PBKDF2 (600k) → AES-256-GCM encryption for the app lock, weak-code check, lockout timing |
-| `sw.js` | Network-first service worker, cache for offline |
-| `*.test.js` | `node --test` suites (34 tests, all passing) |
+| `remind.js` (`REMIND`) | Monthly reminder dates: when it's due, snooze, once-a-month notify, `.ics` calendar file |
+| `sw.js` | Network-first service worker, cache for offline; shows the reminder notification on `periodicsync` |
+| `*.test.js` | `node --test` suites (40 tests, all passing) |
 | `test-fixtures/` | Four generated fake PDF statements + expected JSON. `make-fixtures.js` rebuilds them (needs Playwright). |
 
 ## Commands
@@ -76,6 +77,10 @@ appears in the same command. Use a bracket pattern like `"http.server 800[0]"`.
   encrypted, **when the lock is on**. The plaintext key is then removed.
 - `statement-check.v1.lock`: lock metadata `{ salt, iter, timeout, fails, until }` (not secret).
 - `statement-check.v1.tab`: the last open tab.
+- `statement-check.v1.remind`: reminder `{ day, hour, lastImport, snoozeUntil, notified }`
+  (not secret, kept outside the encryption). Copied into the Cache API
+  (`statement-check-remind` → `./__remind.json`) so the service worker can
+  read it; `sw.js` must not delete that cache on activate.
 
 Transaction: `{ id, date 'YYYY-MM-DD', desc, amount (<0 = out), balance|null,
 merchant, importId, seq, edited? }`. The `id` is `date|amount|desc#n` and
@@ -107,7 +112,9 @@ through the `saving` promise). Always go through `save()`.
 
 Everything requested so far is done and live: anomaly alerts; learning
 categories with corrections; category spending alerts; editing, renaming
-and merging payees; PDF import (tuned for NatWest); batch import; app lock.
+and merging payees; PDF import (tuned for NatWest); batch import; app lock;
+monthly statement reminder (in-app banner, best-effort phone notification via
+Periodic Background Sync, `.ics` calendar fallback).
 
 Open / next:
 
