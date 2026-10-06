@@ -5,6 +5,9 @@
   const SC = window.SC;
   const CAT = window.CAT;
   const PDFS = window.PDFS;
+  const LOCK = window.LOCK;
+  const ENC_KEY = 'statement-check.v1.enc';
+  const META_KEY = 'statement-check.v1.lock';
   const KEY = 'statement-check.v1';
   const $ = (sel, el) => (el || document).querySelector(sel);
   const view = $('#view');
@@ -19,17 +22,36 @@
   let tab = 'alerts';
   const ui = { sev: 'all', showDismissed: false, q: '', txFilter: 'all', cat: '', txLimit: 300, chartTable: false };
 
+  function adopt(data) {
+    db = Object.assign(blank(), data || {});
+    if (!db.cats || !Array.isArray(db.cats.list)) db.cats = CAT.freshState();
+    for (const k of ['mutes', 'aliases', 'deleted']) if (!db[k]) db[k] = {};
+  }
+
   function load() {
     try {
       const raw = localStorage.getItem(KEY);
-      if (raw) db = Object.assign(db, JSON.parse(raw));
-      if (!db.cats || !Array.isArray(db.cats.list)) db.cats = CAT.freshState();
-      for (const k of ['mutes', 'aliases', 'deleted']) if (!db[k]) db[k] = {};
-    } catch { /* private mode or blocked storage: start empty */ }
+      adopt(raw ? JSON.parse(raw) : null);
+    } catch { adopt(null); /* private mode or blocked storage: start empty */ }
     try { const t = localStorage.getItem(KEY + '.tab'); if (t) tab = t; } catch { /* ignore */ }
   }
 
+  // With the app lock on, only the encrypted copy is ever written.
+  let cryptoKey = null;
+  let lockMeta = readMeta();
+  let saving = Promise.resolve();
+
   function save() {
+    if (lockMeta) {
+      if (!cryptoKey) return false;
+      const text = JSON.stringify(db);
+      const key = cryptoKey;
+      saving = saving
+        .then(() => LOCK.encryptText(key, text))
+        .then((blob) => localStorage.setItem(ENC_KEY, JSON.stringify(blob)))
+        .catch(() => toast("Couldn't save on this device — storage may be full or blocked."));
+      return true;
+    }
     try {
       localStorage.setItem(KEY, JSON.stringify(db));
       return true;
@@ -37,6 +59,20 @@
       toast("Couldn't save on this device — storage may be full or blocked.");
       return false;
     }
+  }
+
+  function readMeta() {
+    try {
+      const m = JSON.parse(localStorage.getItem(META_KEY) || 'null');
+      return m && m.salt ? m : null;
+    } catch { return null; }
+  }
+
+  function writeMeta() {
+    try {
+      if (lockMeta) localStorage.setItem(META_KEY, JSON.stringify(lockMeta));
+      else localStorage.removeItem(META_KEY);
+    } catch { /* ignore */ }
   }
 
   function reanalyse() {
@@ -152,6 +188,12 @@
   }
 
   function render() {
+    const badge = $('#lock-badge');
+    if (badge) {
+      badge.dataset.act = lockMeta ? 'lock-now' : '';
+      badge.title = lockMeta ? 'Lock the app now' : 'Your statements never leave this device';
+      $('span', badge).textContent = lockMeta ? 'Lock' : 'On this device only';
+    }
     document.querySelectorAll('nav.tabs button').forEach((b) => {
       if (b.dataset.tab === tab) b.setAttribute('aria-current', 'page');
       else b.removeAttribute('aria-current');
@@ -555,6 +597,7 @@
           <button class="btn small" data-act="export-csv" ${db.txns.length ? '' : 'disabled'}>Export to spreadsheet (CSV)</button>
         </div>
       </div>
+      ${lockCard()}
       ${categoryManager()}
       <div class="card small">
         <b>Privacy</b>
@@ -596,7 +639,9 @@
 
   // One file: its own review screen. Several: read them all, then one
   // screen for the batch.
+  let pendingFiles = null;
   async function handleFiles(files) {
+    if (lockMeta && !cryptoKey) { pendingFiles = files; return; } // opened via "Open with" while locked
     if (files.length > 1) return batchImport(files);
     if (/\.pdf$/i.test(files[0].name || '')) toast(`Reading ${files[0].name}…`);
     const e = await readFile(files[0]);
@@ -1245,6 +1290,10 @@
       case 'more': ui.txLimit += 300; render(); break;
       case 'chart-table': ui.chartTable = !ui.chartTable; render(); break;
       case 'backup': backup(); break;
+      case 'lock-now': lockNow(); break;
+      case 'lock-on': setupCode(); break;
+      case 'lock-change': changeCode(); break;
+      case 'lock-off': turnOffCode(); break;
       case 'sort': openSort(); break;
       case 'review': openSort('review'); break;
       case 'export-csv': exportCSV(); break;
@@ -1283,6 +1332,7 @@
 
   document.addEventListener('change', (e) => {
     if (e.target.id === 'cat-filter') { ui.cat = e.target.value; ui.txLimit = 300; return render(); }
+    if (e.target.id === 'lock-timeout') { lockMeta.timeout = +e.target.value; writeMeta(); return toast('Saved.'); }
     if (e.target.id === 'currency') { db.settings.currency = e.target.value; save(); reanalyse(); render(); }
   });
 
@@ -1311,11 +1361,269 @@
     });
   }
 
+  // --------------------------------------------------------------- lock ----
+
+  // A 6-dot code entry with an on-screen keypad (and keyboard support).
+  // onComplete(code) resolves true to finish, or a message to show and retry.
+  function codePad(host, { title, sub, onComplete, footer }) {
+    let code = '';
+    let busy = false;
+    host.innerHTML = `<div class="pad">
+      <h2 class="pad-title">${esc(title)}</h2>
+      <p class="sub pad-sub">${esc(sub || '')}</p>
+      <div class="dots" aria-hidden="true">${'<i></i>'.repeat(6)}</div>
+      <p class="pad-msg" role="alert"></p>
+      <div class="keys">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button data-k="${n}">${n}</button>`).join('')}
+        <span></span><button data-k="0">0</button><button data-k="del" aria-label="Delete">⌫</button></div>
+      ${footer || ''}
+    </div>`;
+    const dots = host.querySelectorAll('.dots i');
+    const msg = $('.pad-msg', host);
+    const paint = () => dots.forEach((d, i) => d.classList.toggle('on', i < code.length));
+    const press = async (k) => {
+      if (busy) return;
+      if (k === 'del') code = code.slice(0, -1);
+      else if (code.length < 6) code += k;
+      paint();
+      if (code.length < 6) return;
+      busy = true;
+      msg.textContent = '';
+      host.classList.add('busy');
+      const r = await onComplete(code);
+      host.classList.remove('busy');
+      busy = false;
+      if (r === true) return;
+      code = '';
+      paint();
+      msg.textContent = r || '';
+      if (!r) return; // a step done (e.g. first entry of a new code), not a mistake
+      const d = $('.dots', host);
+      d.classList.remove('shake');
+      void d.offsetWidth;
+      d.classList.add('shake');
+    };
+    host.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-k]');
+      if (b) press(b.dataset.k);
+    });
+    const onKey = (e) => {
+      if (!host.isConnected) return document.removeEventListener('keydown', onKey);
+      if (/^\d$/.test(e.key)) { e.preventDefault(); press(e.key); }
+      else if (e.key === 'Backspace') { e.preventDefault(); press('del'); }
+    };
+    document.addEventListener('keydown', onKey);
+    return { setTitle: (t, sb) => { $('.pad-title', host).textContent = t; $('.pad-sub', host).textContent = sb || ''; }, setMsg: (m) => { msg.textContent = m; } };
+  }
+
+  function showLockScreen() {
+    if ($('#lockscreen')) return;
+    const el = document.createElement('div');
+    el.id = 'lockscreen';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.setAttribute('aria-label', 'Unlock Statement Check');
+    document.body.appendChild(el);
+    document.body.classList.add('locked');
+    let timer = null;
+    const pad = codePad(el, {
+      title: 'Statement Check',
+      sub: 'Enter your 6-digit code',
+      footer: '<button class="btn ghost small" data-forgot="1" style="margin-top:18px">Forgot your code?</button>',
+      onComplete: async (code) => {
+        const wait = (lockMeta.until || 0) - Date.now();
+        if (wait > 0) return waitMessage(wait);
+        pad.setMsg('Unlocking…');
+        try {
+          const key = await LOCK.deriveKey(code, lockMeta.salt, lockMeta.iter);
+          const blob = JSON.parse(localStorage.getItem(ENC_KEY) || 'null');
+          const data = blob ? JSON.parse(await LOCK.decryptText(key, blob)) : null;
+          cryptoKey = key;
+          lockMeta.fails = 0;
+          lockMeta.until = 0;
+          writeMeta();
+          adopt(data);
+          try { const t = localStorage.getItem(KEY + '.tab'); if (t) tab = t; } catch { /* ignore */ }
+          clearInterval(timer);
+          el.remove();
+          document.body.classList.remove('locked');
+          reanalyse();
+          render();
+          if (pendingFiles) { const f = pendingFiles; pendingFiles = null; handleFiles(f); }
+          return true;
+        } catch {
+          lockMeta.fails = (lockMeta.fails || 0) + 1;
+          const ms = LOCK.lockoutMs(lockMeta.fails);
+          lockMeta.until = ms ? Date.now() + ms : 0;
+          writeMeta();
+          if (ms) { tick(); return waitMessage(ms); }
+          const left = LOCK.MAX_FREE_TRIES - lockMeta.fails;
+          return `Wrong code. ${left} ${left === 1 ? 'try' : 'tries'} before a short wait.`;
+        }
+      },
+    });
+    function waitMessage(ms) {
+      const sec = Math.ceil(ms / 1000);
+      return `Too many wrong codes. Try again in ${sec >= 60 ? Math.ceil(sec / 60) + ' min' : sec + 's'}.`;
+    }
+    function tick() {
+      clearInterval(timer);
+      timer = setInterval(() => {
+        const left = (lockMeta.until || 0) - Date.now();
+        if (left <= 0) { clearInterval(timer); pad.setMsg(''); return; }
+        pad.setMsg(waitMessage(left));
+      }, 1000);
+    }
+    if ((lockMeta.until || 0) > Date.now()) { pad.setMsg(waitMessage(lockMeta.until - Date.now())); tick(); }
+    el.addEventListener('click', (e) => {
+      if (!e.target.closest('[data-forgot]')) return;
+      if (!confirm('There is no way to recover the code — it is the key that unlocks your data.\n\nYou can delete everything in this app and start again. Restore a backup afterwards if you saved one.')) return;
+      if (!confirm('Delete all statements, categories and settings on this phone?')) return;
+      try { [KEY, ENC_KEY, META_KEY].forEach((k) => localStorage.removeItem(k)); } catch { /* ignore */ }
+      lockMeta = null;
+      cryptoKey = null;
+      clearInterval(timer);
+      el.remove();
+      document.body.classList.remove('locked');
+      load(); reanalyse(); go('files');
+      toast('Everything was deleted. You can set a new code in Statements → App lock.');
+    });
+  }
+
+  async function lockNow() {
+    if (!lockMeta || !cryptoKey) return;
+    await saving; // finish writing before the key is dropped
+    cryptoKey = null;
+    adopt(null);
+    result = null;
+    cats = new Map();
+    document.querySelectorAll('.sheet-bg, .toast').forEach((x) => x.remove());
+    popBack = null;
+    view.innerHTML = '';
+    $('#alert-badge').hidden = true;
+    showLockScreen();
+  }
+
+  // Ask for the current code, resolving with its key (or null if cancelled).
+  function askCurrentCode(title) {
+    return new Promise((resolve) => {
+      const sh = openSheet('<div class="pad-host"></div><button class="btn block" data-x="close" style="margin-top:8px">Cancel</button>');
+      let done = false;
+      codePad($('.pad-host', sh.el), {
+        title,
+        sub: 'Enter your current code',
+        onComplete: async (code) => {
+          try {
+            const key = await LOCK.deriveKey(code, lockMeta.salt, lockMeta.iter);
+            await LOCK.decryptText(key, JSON.parse(localStorage.getItem(ENC_KEY)));
+            done = true;
+            sh.close();
+            resolve(key);
+            return true;
+          } catch { return 'Wrong code.'; }
+        },
+      });
+      sh.el.addEventListener('click', (e) => { if (e.target.closest('[data-x="close"]')) { sh.close(); } });
+      const obs = new MutationObserver(() => { if (!sh.el.isConnected) { obs.disconnect(); if (!done) resolve(null); } });
+      obs.observe(document.body, { childList: true });
+    });
+  }
+
+  // Choose a new code (twice), then encrypt everything with it.
+  function chooseNewCode(title) {
+    return new Promise((resolve) => {
+      const sh = openSheet('<div class="pad-host"></div><button class="btn block" data-x="close" style="margin-top:8px">Cancel</button>');
+      let first = null;
+      let done = false;
+      const pad = codePad($('.pad-host', sh.el), {
+        title,
+        sub: 'Choose a 6-digit code',
+        onComplete: async (code) => {
+          if (!first) {
+            if (LOCK.isWeakCode(code)) return 'Too easy to guess — avoid repeated or sequential digits.';
+            first = code;
+            pad.setTitle(title, 'Enter the same code again');
+            return '';
+          }
+          if (code !== first) { first = null; pad.setTitle(title, 'Choose a 6-digit code'); return "Codes didn't match — start again."; }
+          pad.setMsg('Encrypting your data…');
+          const salt = LOCK.randomSalt();
+          const key = await LOCK.deriveKey(code, salt, LOCK.ITERATIONS);
+          const blob = await LOCK.encryptText(key, JSON.stringify(db));
+          JSON.parse(await LOCK.decryptText(key, blob)); // check before relying on it
+          try { localStorage.setItem(ENC_KEY, JSON.stringify(blob)); } catch { return "Couldn't save — storage may be full."; }
+          const timeout = lockMeta ? lockMeta.timeout : 60000;
+          lockMeta = { v: 1, salt, iter: LOCK.ITERATIONS, timeout, fails: 0, until: 0 };
+          writeMeta();
+          cryptoKey = key;
+          try { localStorage.removeItem(KEY); } catch { /* ignore */ }
+          done = true;
+          sh.close();
+          resolve(true);
+          return true;
+        },
+      });
+      sh.el.addEventListener('click', (e) => { if (e.target.closest('[data-x="close"]')) sh.close(); });
+      const obs = new MutationObserver(() => { if (!sh.el.isConnected) { obs.disconnect(); if (!done) resolve(false); } });
+      obs.observe(document.body, { childList: true });
+    });
+  }
+
+  async function setupCode() {
+    if (await chooseNewCode('Set an app code')) { render(); toast('Code set. Your data is now encrypted on this phone.'); }
+  }
+
+  async function changeCode() {
+    if (!(await askCurrentCode('Change code'))) return;
+    await saving;
+    if (await chooseNewCode('Change code')) { render(); toast('Code changed.'); }
+  }
+
+  async function turnOffCode() {
+    if (!(await askCurrentCode('Turn off app lock'))) return;
+    await saving;
+    try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { return toast("Couldn't save — storage may be full."); }
+    try { localStorage.removeItem(ENC_KEY); } catch { /* ignore */ }
+    lockMeta = null;
+    cryptoKey = null;
+    writeMeta();
+    render();
+    toast('App lock turned off. Your data is no longer encrypted.');
+  }
+
+  function lockCard() {
+    const t = lockMeta ? lockMeta.timeout : 60000;
+    const opt = (v, l) => `<option value="${v}" ${t === v ? 'selected' : ''}>${l}</option>`;
+    return `<h3>App lock</h3>
+      <div class="card">
+        ${lockMeta
+          ? `<p class="small" style="margin:0 0 10px">🔒 <b>On.</b> <span class="muted">Your data is encrypted with your 6-digit code. Without it, what's saved on this phone is unreadable.</span></p>
+            <label class="small muted" for="lock-timeout">Lock when I leave the app</label>
+            <select id="lock-timeout" style="margin:4px 0 12px">${opt(0, 'Immediately')}${opt(60000, 'After 1 minute')}${opt(300000, 'After 5 minutes')}${opt(900000, 'After 15 minutes')}</select>
+            <div class="row" style="flex-wrap:wrap"><button class="btn small" data-act="lock-change">Change code</button><button class="btn small" data-act="lock-off">Turn off</button></div>`
+          : `<p class="small muted" style="margin:0 0 10px">Ask for a 6-digit code each time the app opens. Your data is also encrypted with it, so it can't be read without the code.</p>
+            <button class="btn primary small" data-act="lock-on">Set a code</button>`}
+        <p class="small muted" style="margin:10px 0 0">There's no way to recover a forgotten code. Keep a backup (above) somewhere safe — backups are <b>not</b> encrypted.</p>
+      </div>`;
+  }
+
+  // Leaving the app: hide the contents from the app switcher, and lock
+  // after the chosen time away.
+  let hiddenAt = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      document.body.classList.add('privacy');
+      hiddenAt = Date.now();
+      if (lockMeta && cryptoKey && !lockMeta.timeout) lockNow();
+    } else {
+      document.body.classList.remove('privacy');
+      if (lockMeta && cryptoKey && Date.now() - hiddenAt >= lockMeta.timeout) lockNow();
+    }
+  });
+
   // ------------------------------------------------------------- start ----
 
-  load();
-  reanalyse();
-  render();
+  if (lockMeta) showLockScreen();
+  else { load(); reanalyse(); render(); }
 
   // Ask the browser not to evict our data under storage pressure.
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});

@@ -88,7 +88,7 @@
     }
     header.top .wrap { display: flex; align-items: center; gap: 10px; height: 56px; }
     header.top h1 { font-size: 18px; margin: 0; flex: 1; letter-spacing: -.01em; }
-    .lock { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text2);
+    .lock { border: 0; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text2);
       background: var(--surface2); border-radius: 99px; padding: 4px 10px; }
 
     nav.tabs {
@@ -205,6 +205,25 @@
     .chip.suggested { border: 2px dashed var(--accent); }
     .stack { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--surface2); margin: 10px 0 8px; gap: 2px; }
     .stack div { height: 100%; }
+    /* App lock */
+    #lockscreen { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; align-items: center; justify-content: center;
+      padding: calc(24px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom)); overflow: auto; }
+    body.locked main, body.locked nav.tabs, body.locked header.top { visibility: hidden; }
+    body.privacy main, body.privacy .sheet-bg { visibility: hidden; }
+    .pad { width: 100%; max-width: 320px; margin: 0 auto; text-align: center; }
+    .pad h2 { margin: 0 0 4px; }
+    .pad .sub { margin: 0 0 18px; }
+    .dots { display: flex; justify-content: center; gap: 14px; margin: 8px 0 6px; }
+    .dots i { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--text2); display: block; }
+    .dots i.on { background: var(--text); border-color: var(--text); }
+    .dots.shake { animation: shake .35s; }
+    @keyframes shake { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
+    @media (prefers-reduced-motion: reduce) { .dots.shake { animation: none; } }
+    .pad-msg { min-height: 20px; font-size: 14px; color: var(--text2); margin: 6px 0 10px; }
+    .keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .keys button { width: 72px; height: 72px; justify-self: center; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); font-size: 26px; font-weight: 500; color: var(--text); }
+    .keys button:active { background: var(--surface2); }
+    .busy .keys { opacity: .5; pointer-events: none; }
     details summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 14px; }
     @media (min-width: 480px) { .tile .v { font-size: 20px; } }
   </style>
@@ -213,10 +232,10 @@
   <header class="top">
     <div class="wrap">
       <h1>Statement Check</h1>
-      <span class="lock" title="Your statements never leave this device">
+      <button class="lock" id="lock-badge" title="Your statements never leave this device">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-        On this device only
-      </span>
+        <span>On this device only</span>
+      </button>
     </div>
   </header>
 
@@ -248,6 +267,7 @@
   <script src="analyse.js"></script>
   <script src="categorise.js"></script>
   <script src="pdfstatement.js"></script>
+  <script src="lock.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -44,6 +44,29 @@ and "never flag" choices over, and remembers the alias for future imports.
 learned guess: one tap to confirm, or pick the right one. Every correction
 retrains the guesses.
 
+## App lock
+
+Statements → **App lock** sets a 6-digit code that's asked for every time the
+app opens. The code is more than a gate: it's stretched into an AES-256 key
+(PBKDF2-SHA256, 600,000 rounds, random salt, via the browser's Web Crypto) and
+everything the app saves is encrypted with it (`lock.js`). Only the encrypted
+copy is stored, and a wrong code is detected because decryption fails.
+
+- Obvious codes (000000, 123456…) are refused.
+- After 5 wrong codes there's a 30-second wait, doubling each time up to 15
+  minutes. The wait survives closing and reopening the app.
+- The app locks when you leave it (immediately, or after 1, 5 or 15 minutes),
+  and the header's **Lock** button locks it at once. Its contents are hidden
+  from the recent-apps preview.
+- A forgotten code can't be recovered, since it's the key. "Forgot your
+  code?" deletes everything so you can start again. Backups are *not*
+  encrypted, so keep them somewhere private.
+
+What it protects against: someone picking up your unlocked phone, or reading
+the app's storage. A 6-digit code has a million combinations, so a determined
+attacker who copied the encrypted data off the phone could eventually try
+them all. The phone's own screen lock and encryption remain the first line.
+
 ## Categories that learn
 
 Tap any transaction to give it a category, or use **Sort payees** to work
@@ -123,6 +146,6 @@ python3 -m http.server 8000   # then open http://localhost:8000
 node --test                   # engine tests (run from this folder)
 ```
 
-`analyse.js` is the pure parsing and detection engine, `categorise.js` the category learning and `pdfstatement.js` the PDF reader, shared by the page and
+`analyse.js` is the pure parsing and detection engine, `categorise.js` the category learning, `pdfstatement.js` the PDF reader and `lock.js` the app lock's encryption, shared by the page and
 the tests. `app.js` is the UI. `sw.js` caches the app's own files for offline use.
 Bump `CACHE` in `sw.js` when you change any file.
