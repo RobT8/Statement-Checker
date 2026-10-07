@@ -166,15 +166,42 @@ function layoutD() {
   return { html, expected: expected(txns) };
 }
 
+// E: credit card with two dates per line (transaction, then posting a few
+// days later), year-less dates, CR payments, no balance column, a summary
+// box with credit limit, minimum payment and new balance, masked card number.
+function layoutE() {
+  const start = new Date(Date.UTC(2026, 4, 3));
+  let owed = 250;
+  const txns = makeTxns(start, 30, 0).map((t) => {
+    const pay = t.amount > 0;
+    const amount = pay ? 250 : t.amount;
+    owed = Math.round((owed - amount) * 100) / 100;
+    return { ...t, amount, lines: pay ? ['PAYMENT RECEIVED - THANK YOU'] : t.lines.slice(0, 1) };
+  });
+  const dm = (d) => `${String(d.getUTCDate()).padStart(2, '0')} ${MON[d.getUTCMonth()]}`;
+  const rows = txns.map((t) => {
+    const posted = new Date(t.date.getTime() + 2 * 86400000);
+    return `<tr><td>${dm(t.date)}</td><td>${dm(posted)}</td><td>${t.lines.join(' ')}</td><td class="n">${money(t.amount)}${t.amount > 0 ? ' CR' : ''}</td></tr>`;
+  }).join('');
+  const html = `<style>${css}</style><h1>Example Bank Credit Card</h1><p>Card number XXXX XXXX XXXX 5678</p>
+    <p>Statement date 04 Jun 2026</p>
+    <table style="width:100%;margin-bottom:12px;white-space:nowrap"><tr><td>Credit limit</td><td class="n">£3,000.00</td><td>Minimum payment</td><td class="n">£25.00</td>
+      <td>New balance</td><td class="n">£${money(owed)}</td></tr></table>
+    <table><thead><tr><th>Transaction date</th><th>Posting date</th><th>Description</th><th class="n">Amount (£)</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return { html, expected: { owed, txns: expected(txns) } };
+}
+
 (async () => {
+  const only = process.argv.slice(2);
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  for (const [name, make] of [['layout-a', layoutA], ['layout-b', layoutB], ['layout-c', layoutC], ['layout-d', layoutD]]) {
+  for (const [name, make] of [['layout-a', layoutA], ['layout-b', layoutB], ['layout-c', layoutC], ['layout-d', layoutD], ['layout-e', layoutE]]) {
+    if (only.length && !only.includes(name)) continue;
     const { html, expected: exp } = make();
     await page.setContent(html);
     await page.pdf({ path: path.join(__dirname, name + '.pdf'), format: 'A4', margin: { top: '15mm', bottom: '15mm', left: '12mm', right: '12mm' } });
     fs.writeFileSync(path.join(__dirname, name + '.json'), JSON.stringify(exp, null, 1));
-    console.log(name, exp.length, 'transactions');
+    console.log(name, (exp.txns || exp).length, 'transactions');
   }
   await browser.close();
 })();

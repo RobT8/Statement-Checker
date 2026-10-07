@@ -7,6 +7,7 @@
   const PDFS = window.PDFS;
   const LOCK = window.LOCK;
   const REMIND = window.REMIND;
+  const ACCT = window.ACCT;
   const ENC_KEY = 'statement-check.v1.enc';
   const META_KEY = 'statement-check.v1.lock';
   const KEY = 'statement-check.v1';
@@ -22,17 +23,19 @@
 
   // ------------------------------------------------------------- state ----
 
-  const blank = () => ({ imports: [], txns: [], dismissed: {}, mutes: {}, aliases: {}, deleted: {}, settings: { currency: 'GBP' }, cats: CAT.freshState() });
+  const blank = () => ({ accounts: [], imports: [], txns: [], dismissed: {}, mutes: {}, aliases: {}, deleted: {}, settings: { currency: 'GBP' }, cats: CAT.freshState() });
   let db = blank();
   let result = null;
   let cats = new Map(); // txn id -> { cat, source, confidence }
   let tab = 'alerts';
-  const ui = { sev: 'all', showDismissed: false, q: '', txFilter: 'all', cat: '', txLimit: 300, chartTable: false, notify: '' };
+  const ui = { sev: 'all', showDismissed: false, q: '', txFilter: 'all', cat: '', txLimit: 300, chartTable: false, notify: '', account: 'all' };
 
   function adopt(data) {
     db = Object.assign(blank(), data || {});
     if (!db.cats || !Array.isArray(db.cats.list)) db.cats = CAT.freshState();
     for (const k of ['mutes', 'aliases', 'deleted']) if (!db[k]) db[k] = {};
+    ACCT.migrate(db);
+    if (ui.account !== 'all' && !db.accounts.some((a) => a.id === ui.account)) ui.account = 'all';
   }
 
   function load() {
@@ -135,10 +138,45 @@
     } catch { ui.notify = 'no-install'; }
   }
 
+  // Each account is checked on its own (balances, regular income, what's a
+  // large payment for it); the whole picture gives the All view its totals.
   function reanalyse() {
-    result = SC.analyse(db.txns, { format: money, formatDate: niceDate });
+    const opts = { format: money, formatDate: niceDate };
+    result = SC.analyse(db.txns, opts);
+    result.byAccount = {};
+    if (db.accounts.length === 1) {
+      const id = db.accounts[0].id;
+      result.patterns.forEach((p) => { p.accountId = id; });
+      result.byAccount[id] = result;
+    } else if (db.accounts.length > 1) {
+      result.flags = [];
+      result.patterns = [];
+      for (const acc of db.accounts) {
+        const r = SC.analyse(db.txns.filter((t) => t.accountId === acc.id), opts);
+        r.patterns.forEach((p) => {
+          p.accountId = acc.id;
+          if (acc.id !== 'main') p.id = acc.id + '|' + p.id; // keeps "it's fine" per account
+        });
+        result.flags.push(...r.flags);
+        result.patterns.push(...r.patterns);
+        result.byAccount[acc.id] = r;
+      }
+    }
     result.basePatterns = result.patterns;
     recategorise();
+  }
+
+  // What the current tab shows: one account, or all of them.
+  function viewTxns() {
+    return ui.account === 'all' ? db.txns : db.txns.filter((t) => t.accountId === ui.account);
+  }
+
+  function viewResult() {
+    return (ui.account !== 'all' && result.byAccount[ui.account]) || result;
+  }
+
+  function accountById(id) {
+    return db.accounts.find((a) => a.id === id);
   }
 
   // Categories feed the alerts, so any category change re-runs that part.
@@ -213,12 +251,12 @@
       const reasons = ui.showDismissed ? f.reasons : live;
       if (!reasons.length) continue;
       const severity = reasons.reduce((s, r) => (SEV_RANK[r.severity] > SEV_RANK[s] ? r.severity : s), 'low');
-      out.push({ kind: 'txn', id: f.txn.id, txn: f.txn, reasons, severity, dismissed: !live.length, date: f.txn.date });
+      out.push({ kind: 'txn', id: f.txn.id, txn: f.txn, reasons, severity, dismissed: !live.length, date: f.txn.date, acc: f.txn.accountId });
     }
     for (const p of result.patterns) {
       const dismissed = !!db.dismissed[p.id];
       if (dismissed && !ui.showDismissed) continue;
-      out.push({ kind: 'pattern', id: p.id, pattern: p, severity: p.severity, dismissed, date: result.stats.dataEnd });
+      out.push({ kind: 'pattern', id: p.id, pattern: p, severity: p.severity, dismissed, date: result.stats.dataEnd, acc: p.accountId || '' });
     }
     return out.sort((a, b) => SEV_RANK[b.severity] - SEV_RANK[a.severity] || (a.date < b.date ? 1 : -1));
   }
@@ -346,17 +384,50 @@
     </details>`;
   }
 
+  // Chips to look at one account or card, or all of them.
+  function accountSwitcher() {
+    if (db.accounts.length < 2) return '';
+    return `<div class="chips acct-chips" role="group" aria-label="Show account">
+      <button class="chip" data-acct-view="all" aria-pressed="${ui.account === 'all'}">All</button>
+      ${db.accounts.map((a) => `<button class="chip" data-acct-view="${esc(a.id)}" aria-pressed="${ui.account === a.id}">${ACCT.icon(a)} ${esc(ACCT.label(a))}</button>`).join('')}
+    </div>`;
+  }
+
+  // Each account's latest balance, and the two totals.
+  function accountSummary() {
+    if (db.accounts.length < 2) return '';
+    const t = ACCT.totals(db);
+    const row = (a) => {
+      const b = ACCT.balance(a, db);
+      const val = !b ? '<span class="muted small">no balance on statement</span>'
+        : a.type === 'card' ? `<b>${money(b.amount)}</b> <span class="muted small">owed</span>` : `<b>${money(b.amount, b.amount < 0)}</b>`;
+      return `<div class="tx" data-acct-view="${esc(a.id)}" role="button" tabindex="0" style="cursor:pointer">
+        <div style="font-size:20px" aria-hidden="true">${ACCT.icon(a)}</div>
+        <div class="grow"><div class="ellipsis">${esc(ACCT.label(a))}</div>${b ? `<div class="muted small">at ${niceDate(b.date)}</div>` : ''}</div>
+        <div class="a nowrap">${val}</div></div>`;
+    };
+    return `<div class="card acct-sum" style="padding:4px 14px 12px">
+      ${db.accounts.map(row).join('')}
+      <div class="tiles" style="margin:12px 0 0">
+        <div class="tile"><div class="k">In accounts</div><div class="v">${t.banks ? money(t.inAccounts, t.inAccounts < 0) : '—'}</div></div>
+        <div class="tile"><div class="k">Owed on cards</div><div class="v">${t.cards ? money(t.owedOnCards) : '—'}</div></div>
+      </div>
+    </div>`;
+  }
+
   function renderAlerts() {
-    const alerts = allAlerts();
+    let alerts = allAlerts();
+    if (ui.account !== 'all') alerts = alerts.filter((a) => a.acc === ui.account);
     const live = alerts.filter((a) => !a.dismissed);
     const counts = { high: 0, medium: 0, low: 0 };
     live.forEach((a) => counts[a.severity]++);
     const shown = alerts.filter((a) => ui.sev === 'all' || a.severity === ui.sev);
-    const s = result.stats;
+    const s = viewResult().stats;
     const nDismissed = dismissedCount();
 
-    let html = `<h2>${live.length ? `${live.length} thing${live.length === 1 ? '' : 's'} worth a look` : 'Nothing unusual found'}</h2>
-      <p class="sub">${s.count.toLocaleString('en-GB')} transactions · ${niceDate(s.dataStart)} – ${niceDate(s.dataEnd)}</p>`;
+    let html = `${accountSwitcher()}${ui.account === 'all' ? accountSummary() : ''}
+      <h2>${live.length ? `${live.length} thing${live.length === 1 ? '' : 's'} worth a look` : 'Nothing unusual found'}</h2>
+      <p class="sub">${s ? `${s.count.toLocaleString('en-GB')} transactions · ${niceDate(s.dataStart)} – ${niceDate(s.dataEnd)}` : 'No transactions in this account yet'}</p>`;
     if (live.length) {
       html += `<div class="chips" role="group" aria-label="Filter by severity">
         <button class="chip" data-sev="all" aria-pressed="${ui.sev === 'all'}">All ${live.length}</button>
@@ -368,11 +439,19 @@
       html += `<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m8 12 3 3 5-6"/></svg>
         <p>Everything looks normal. Load more months of statements to make the checks sharper — they learn what's usual for you.</p></div>`;
     }
-    html += shown.map(alertCard).join('');
+    if (ui.account === 'all' && db.accounts.length > 1) {
+      // Grouped: each account or card, then what's about all of them.
+      const groups = db.accounts.map((acc) => [`${ACCT.icon(acc)} ${esc(ACCT.label(acc))}`, shown.filter((a) => a.acc === acc.id)]);
+      groups.push(['🧾 Across all accounts', shown.filter((a) => !accountById(a.acc))]);
+      for (const [title, list] of groups) {
+        if (!list.length) continue;
+        html += `<h3 class="group-h">${title} <span class="muted small">· ${list.length}</span></h3>${list.map(alertCard).join('')}`;
+      }
+    } else html += shown.map(alertCard).join('');
     if (nDismissed) {
       html += `<p style="text-align:center"><button class="btn ghost" data-act="toggle-dismissed">${ui.showDismissed ? 'Hide' : 'Show'} ${nDismissed} marked as fine</button></p>`;
     }
-    if (s.dataEnd && daysSpan(s.dataStart, s.dataEnd) < 85) {
+    if (s && s.dataEnd && daysSpan(s.dataStart, s.dataEnd) < 85) {
       html += `<div class="card small muted">Only ${daysSpan(s.dataStart, s.dataEnd)} days of history loaded. Three months or more lets Statement Check spot price rises, missed payments and spending that's unusual for <i>you</i>.</div>`;
     }
     return html;
@@ -465,7 +544,8 @@
   function renderTransactions() {
     const flagged = new Set(result.flags.filter((f) => f.reasons.some((r) => !db.dismissed[r.key])).map((f) => f.txn.id));
     const q = ui.q.trim().toLowerCase();
-    let list = [...db.txns].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    let list = [...viewTxns()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    const tagAcc = ui.account === 'all' && db.accounts.length > 1;
     if (q) {
       list = list.filter((t) => t.desc.toLowerCase().includes(q) || t.merchant.includes(q) || t.date.startsWith(q) ||
         Math.abs(t.amount).toFixed(2).includes(q));
@@ -478,7 +558,7 @@
     else if (ui.cat) list = list.filter((t) => cats.get(t.id).cat === ui.cat);
     const total = list.reduce((s, t) => s + t.amount, 0);
 
-    let html = `<h2>Transactions</h2>
+    let html = `${accountSwitcher()}<h2>Transactions</h2>
       <input type="search" id="q" placeholder="Search payee, amount or date (2026-03)" value="${esc(ui.q)}" aria-label="Search transactions" style="margin:8px 0">
       <div class="chips" role="group" aria-label="Filter">
         ${[['all', 'All'], ['flagged', 'Flagged'], ['out', 'Money out'], ['in', 'Money in']].map(([k, l]) =>
@@ -516,7 +596,7 @@
       html += `<div class="tx" data-cat-txn="${esc(t.id)}" role="button" tabindex="0" aria-label="Set category for ${esc(t.desc)}">
         <div class="d"><b>${d.getUTCDate()}</b>${d.toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'UTC' })}</div>
         <div class="grow"><div class="ellipsis">${flagged.has(t.id) ? '<span class="sev high" title="Flagged"><i aria-hidden="true"></i></span> ' : ''}${esc(SC.titleCase(t.merchant))}</div>
-          <div class="muted small ellipsis">${catPill(t)} ${esc(t.desc)}</div></div>
+          <div class="muted small ellipsis">${tagAcc && accountById(t.accountId) ? `<span title="${esc(ACCT.label(accountById(t.accountId)))}">${ACCT.icon(accountById(t.accountId))}</span> ` : ''}${catPill(t)} ${esc(t.desc)}</div></div>
         <div class="a ${t.amount > 0 ? 'in' : ''}">${money(t.amount, true)}</div>
       </div>`;
     }
@@ -526,15 +606,17 @@
   }
 
   function renderInsights() {
-    const s = result.stats;
-    const regular = result.recurring.filter((r) => r.direction === 'out');
+    const vr = viewResult();
+    const s = vr.stats;
+    if (!s) return `${accountSwitcher()}<h2>Insights</h2><div class="empty"><p>No transactions in this account yet.</p></div>`;
+    const regular = vr.recurring.filter((r) => r.direction === 'out');
     const regularTotal = regular.reduce((a, r) => a + r.monthly, 0);
     const spend = new Map();
-    for (const t of db.txns) if (t.amount < 0) spend.set(t.merchant, (spend.get(t.merchant) || 0) - t.amount);
+    for (const t of viewTxns()) if (t.amount < 0) spend.set(t.merchant, (spend.get(t.merchant) || 0) - t.amount);
     const top = [...spend.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
     const topMax = top.length ? top[0][1] : 1;
 
-    return `<h2>Insights</h2>
+    return `${accountSwitcher()}<h2>Insights</h2>
       <p class="sub">${niceDate(s.dataStart)} – ${niceDate(s.dataEnd)}</p>
       <div class="tiles">
         <div class="tile"><div class="k">Money in</div><div class="v">${whole(s.totalIn)}</div></div>
@@ -567,11 +649,11 @@
   }
 
   function categoryBreakdown() {
-    const months = Math.max(1, result.stats.months.length);
+    const months = Math.max(1, viewResult().stats.months.length);
     const spend = new Map();
     const income = new Map();
     let moved = 0;
-    for (const t of db.txns) {
+    for (const t of viewTxns()) {
       const id = cats.get(t.id).cat || '__none';
       const c = catById(id);
       if (c && c.type === 'both') { if (t.amount < 0) moved -= t.amount; continue; }
@@ -590,7 +672,7 @@
         </div>`;
       }).join('');
     };
-    const hasAny = [...cats.values()].some((v) => v.cat);
+    const hasAny = viewTxns().some((t) => cats.get(t.id).cat);
     return `<h3>Spending by category</h3>
       ${hasAny ? '' : '<p class="muted small" style="margin:0 0 6px">Nothing categorised yet. <button class="btn ghost small" data-act="sort">Sort your payees</button> and this fills in.</p>'}
       <div class="card">${bars(spend) || '<p class="muted small">No spending.</p>'}
@@ -677,15 +759,10 @@
   function renderFiles() {
     const currencies = ['GBP', 'EUR', 'USD', 'AUD', 'CAD', 'NZD', 'CHF', 'SEK', 'NOK', 'DKK', 'PLN', 'ZAR', 'INR', 'JPY'];
     return `<h2>Statements</h2>
-      <p class="sub">Load several months — or several accounts. Overlapping statements are de-duplicated automatically.</p>
+      <p class="sub">Load several months, accounts and credit cards. Overlapping statements are de-duplicated automatically.</p>
       ${dropZone()}
       ${db.txns.length ? '' : '<p style="text-align:center"><button class="btn ghost" data-act="sample">Try it with sample data</button></p>'}
-      ${db.imports.length ? `<h3>Loaded</h3>${db.imports.map((im) => `
-        <div class="card row">
-          <div class="grow"><div class="ellipsis"><b>${esc(im.name)}</b></div>
-            <div class="muted small">${im.count} transactions${im.dupes ? ` · ${im.dupes} already loaded` : ''}${im.from ? ` · ${niceDate(im.from)} – ${niceDate(im.to)}` : ''}</div></div>
-          <button class="btn small" data-remove="${esc(im.id)}" aria-label="Remove ${esc(im.name)}">Remove</button>
-        </div>`).join('')}` : ''}
+      ${db.accounts.length ? `<h3>Accounts and cards</h3>${db.accounts.map(accountCard).join('')}` : ''}
       ${howToExport()}
 
       <h3>Settings</h3>
@@ -706,6 +783,30 @@
         <p class="muted" style="margin:4px 0 0">Statements are read and analysed inside this app and stored only in this browser on this device. The app is locked down so it cannot send anything over the internet. Clearing your browser's site data — or removing the app — deletes everything.</p>
       </div>
       ${db.txns.length ? '<button class="btn danger block" data-act="wipe" style="margin:18px 0 8px">Delete all data</button>' : ''}`;
+  }
+
+  function accountCard(a) {
+    const imports = db.imports.filter((im) => im.accountId === a.id).sort((x, y) => (x.to < y.to ? 1 : -1));
+    const b = ACCT.balance(a, db);
+    const type = (v, l) => `<option value="${v}" ${a.type === v ? 'selected' : ''}>${l}</option>`;
+    return `<div class="card">
+      <div class="row">
+        <div style="font-size:22px" aria-hidden="true">${ACCT.icon(a)}</div>
+        <div class="grow"><div class="ellipsis"><b>${esc(ACCT.label(a))}</b></div>
+          <div class="muted small">${b ? (a.type === 'card' ? `${money(b.amount)} owed` : `Balance ${money(b.amount, b.amount < 0)}`) + ` at ${niceDate(b.date)}` : 'No balance on its statements'}</div></div>
+      </div>
+      <div class="row" style="margin-top:10px;flex-wrap:wrap">
+        <select data-acct-type="${esc(a.id)}" aria-label="Type of ${esc(ACCT.label(a))}" style="width:auto">${type('current', 'Current account')}${type('savings', 'Savings account')}${type('card', 'Credit card')}</select>
+        <button class="btn small" data-acct-rename="${esc(a.id)}">Rename</button>
+        ${imports.length ? '' : `<button class="btn small" data-acct-delete="${esc(a.id)}">Delete</button>`}
+      </div>
+      ${imports.map((im) => `
+        <div class="tx">
+          <div class="grow"><div class="ellipsis small"><b>${esc(im.name)}</b></div>
+            <div class="muted small">${im.count} transactions${im.dupes ? ` · ${im.dupes} already loaded` : ''}${im.from ? ` · ${niceDate(im.from)} – ${niceDate(im.to)}` : ''}</div></div>
+          <button class="btn small" data-remove="${esc(im.id)}" aria-label="Remove ${esc(im.name)}">Remove</button>
+        </div>`).join('')}
+    </div>`;
   }
 
   function categoryManager() {
@@ -750,10 +851,62 @@
     const t = $('.toast');
     if (t && t.textContent.startsWith('Reading ')) t.remove();
     if (e.status === 'error') return toast(`${e.name}: ${e.note}`);
-    let txns = e.txns;
-    if (e.kind === 'pdf') txns = await pdfSheet(e.name, e.parsed);
-    else if (e.kind === 'csv') txns = await mappingSheet(e.name, e.rows);
-    if (txns) commit(e.name, txns);
+    if (e.kind !== 'pdf' && e.kind !== 'csv') return batchImport(files, [e]); // OFX/QIF: just pick the account
+    const r = e.kind === 'pdf' ? await pdfSheet(e.name, e.parsed, e.acct) : await mappingSheet(e.name, e.rows, e.acct);
+    if (r) commitMany([{ ...e, txns: r.txns, acct: r.acct }]);
+  }
+
+  // ---------------------------------------------------------- accounts ----
+
+  // Which account a statement most likely belongs to. Values are an account
+  // id, or "new:<type>:<last4>" for one that doesn't exist yet.
+  function suggestAccount(detected) {
+    const hit = ACCT.match(db.accounts, detected);
+    if (hit) return hit;
+    if (detected) {
+      const same = db.accounts.filter((a) => (a.type === 'card') === (detected.type === 'card'));
+      const blank = same.filter((a) => !a.last4);
+      if (detected.last4) return blank.length === 1 ? blank[0].id : `new:${detected.type}:${detected.last4}`;
+      if (same.length === 1) return same[0].id;
+      if (!same.length) return `new:${detected.type}:`;
+    }
+    const last = db.settings.lastAccount;
+    if (last && accountById(last)) return last;
+    return db.accounts.length ? db.accounts[0].id : 'new:current:';
+  }
+
+  function accountType(value) {
+    const a = accountById(value);
+    return a ? a.type : String(value).split(':')[1] || 'current';
+  }
+
+  function accountSelect(value, attrs) {
+    const opts = db.accounts.map((a) => [a.id, `${ACCT.icon(a)} ${ACCT.label(a)}`]);
+    const m = /^new:(\w+):(\d+)$/.exec(value);
+    if (m) opts.push([value, `➕ New ${ACCT.TYPES[m[1]].toLowerCase()} ••${m[2]}`]);
+    for (const type of ['current', 'savings', 'card']) opts.push([`new:${type}:`, `➕ New ${ACCT.TYPES[type].toLowerCase()}`]);
+    return `<select ${attrs}>${opts.map(([v, l]) => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+  }
+
+  // Turns a picker value into an account, creating it if new. Several files
+  // in one go that chose the same "new" entry share the new account.
+  function resolveAccount(value, detected, made) {
+    if (made.has(value)) return made.get(value);
+    let acc = accountById(value);
+    if (!acc) {
+      const [, type, last4] = String(value).split(':');
+      const t = ACCT.TYPES[type] ? type : 'current';
+      acc = { id: ACCT.newId(db.accounts), name: ACCT.defaultName(t), type: t, last4: last4 || '' };
+      db.accounts.push(acc);
+    }
+    if (!acc.last4 && detected && detected.last4 && (detected.type === 'card') === (acc.type === 'card')) acc.last4 = detected.last4;
+    made.set(value, acc);
+    return acc;
+  }
+
+  // Signs as they'll be stored: cards always show spending as money out.
+  function signed(txns, acct) {
+    return accountType(acct) === 'card' ? ACCT.cardSigns(txns) : txns;
   }
 
   // Reads and parses a file without any screens (bar a PDF password prompt).
@@ -774,11 +927,15 @@
       if (parsed.scanned) { e.note = 'a scanned image with no text, so it can’t be read'; return e; }
       if (!parsed.txns.length) { e.note = 'no transactions found'; return e; }
       e.txns = parsed.txns;
+      e.detected = parsed.account;
+      e.closing = parsed.statementBalance;
+      e.acct = suggestAccount(parsed.account);
       if (!parsed.balanceChecked) { e.status = 'info'; e.note = 'no running balance to check against'; }
       else if (parsed.balanceOk === parsed.balanceChecked) { e.status = 'ok'; e.note = `all ${parsed.balanceChecked} balances add up`; }
       else { e.status = 'warn'; e.note = `${parsed.balanceChecked - parsed.balanceOk} of ${parsed.balanceChecked} balances don't add up`; }
       return e;
     }
+    e.acct = suggestAccount(null);
     const text = await file.text();
     if (SC.looksLikeOFX(text) || SC.looksLikeQIF(text)) {
       e.kind = 'ofx';
@@ -800,12 +957,12 @@
 
   const STATUS_ICON = { ok: '✅', info: 'ℹ️', warn: '⚠️', error: '❌' };
 
-  async function batchImport(files) {
-    const entries = [];
+  async function batchImport(files, preread) {
+    const entries = preread ? preread.map((e) => ({ ...e, include: true })) : [];
     const bg = document.createElement('div');
     bg.className = 'sheet-bg';
     bg.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="batch-title">
-      <h2 id="batch-title">Import ${files.length} statements</h2><div id="batch-body"><p class="muted">Reading…</p></div></div>`;
+      <h2 id="batch-title">Import ${files.length === 1 ? 'statement' : files.length + ' statements'}</h2><div id="batch-body"><p class="muted">Reading…</p></div></div>`;
     document.body.appendChild(bg);
     const sheet = $('.sheet', bg);
     const body = $('#batch-body', sheet);
@@ -813,7 +970,7 @@
     const close = () => { closed = true; bg.remove(); popBack = null; };
     popBack = close;
 
-    for (let i = 0; i < files.length; i++) {
+    for (let i = entries.length; i < files.length; i++) {
       body.innerHTML = `<p class="muted">Reading ${i + 1} of ${files.length}: ${esc(files[i].name)}…</p>`;
       const e = await readFile(files[i]);
       e.include = e.status !== 'error' && e.txns.length > 0;
@@ -830,7 +987,8 @@
       for (const e of entries) {
         e.fresh = 0;
         if (!e.include) continue;
-        for (const t of SC.assignIds(e.txns)) {
+        const accId = accountById(e.acct) ? e.acct : 'new';
+        for (const t of ACCT.idsFor(signed(e.txns, e.acct), accId)) {
           if (db.deleted[t.id]) continue;
           if (seen.has(t.id)) dupes++; else { seen.add(t.id); fresh++; e.fresh++; dates.push(t.date); }
         }
@@ -844,6 +1002,7 @@
             <div style="font-size:20px;line-height:1.2" aria-hidden="true">${STATUS_ICON[e.status]}</div>
             <div class="grow"><div class="ellipsis"><b>${esc(e.name)}</b></div>
               <div class="small muted">${e.txns.length ? `${e.txns.length} transactions · ${niceDate(d[0])} – ${niceDate(d[d.length - 1])} · ` : ''}${esc(e.note)}${e.checked ? ' · checked by you' : ''}${e.include && e.txns.length && !e.fresh ? ' · <b>all already loaded</b>' : ''}</div>
+              ${e.status !== 'error' && e.txns.length ? accountSelect(e.acct, `data-acct-for="${i}" aria-label="Account for ${esc(e.name)}" style="margin-top:6px"`) : ''}
               ${e.status !== 'error' ? `<div class="row" style="margin-top:6px;gap:12px">
                 <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-include="${i}" ${e.include ? 'checked' : ''} ${e.txns.length ? '' : 'disabled'}> Include</label>
                 ${e.kind === 'pdf' || e.kind === 'csv' ? `<button class="btn small" data-check="${i}">${e.kind === 'csv' ? 'Check columns' : 'Check'}</button>` : ''}
@@ -865,20 +1024,22 @@
     sheet.addEventListener('change', (ev) => {
       const i = ev.target.dataset.include;
       if (i !== undefined) { entries[+i].include = ev.target.checked; draw(); }
+      const a = ev.target.dataset.acctFor;
+      if (a !== undefined) { entries[+a].acct = ev.target.value; draw(); }
     });
     sheet.addEventListener('click', async (ev) => {
       const b = ev.target.closest('button');
       if (!b) return;
       if (b.dataset.check !== undefined) {
         const e = entries[+b.dataset.check];
-        const txns = e.kind === 'pdf' ? await pdfSheet(e.name, e.parsed) : await mappingSheet(e.name, e.rows);
+        const r = e.kind === 'pdf' ? await pdfSheet(e.name, e.parsed, e.acct) : await mappingSheet(e.name, e.rows, e.acct);
         popBack = close;
-        if (txns) { e.txns = txns; e.include = txns.length > 0; e.checked = true; if (e.status === 'warn' && e.kind === 'csv') e.status = 'info'; }
+        if (r) { e.txns = r.txns; e.acct = r.acct; e.include = r.txns.length > 0; e.checked = true; if (e.status === 'warn' && e.kind === 'csv') e.status = 'info'; }
         return draw();
       }
       if (b.dataset.x === 'cancel') return close();
       if (b.dataset.x === 'ok') {
-        const chosen = entries.filter((e) => e.include && e.txns.length).map((e) => ({ name: e.name, txns: e.txns }));
+        const chosen = entries.filter((e) => e.include && e.txns.length);
         close();
         commitMany(chosen);
       }
@@ -925,7 +1086,7 @@
 
   // What was read, and how sure we are: a statement with a running balance
   // can be checked line by line.
-  function pdfSheet(name, parsed) {
+  function pdfSheet(name, parsed, acct) {
     return new Promise((resolve) => {
       let flip = false;
       const dates = parsed.txns.map((t) => t.date).sort();
@@ -941,6 +1102,8 @@
         <h2 id="pdf-title">Check the PDF reading</h2>
         <p class="sub ellipsis">${esc(name)}</p>
         <p class="small" style="margin:0 0 8px"><b>${parsed.txns.length} transactions</b> · ${niceDate(dates[0])} – ${niceDate(dates[dates.length - 1])}</p>
+        <label class="small muted" for="p-acct">Account</label>
+        ${accountSelect(acct, 'id="p-acct" style="margin:4px 0 10px"')}
         ${check}
         <label class="check"><input type="checkbox" id="p-flip"> Flip signs (if spending shows as money in)</label>
         <div id="p-preview" class="preview"></div>
@@ -951,7 +1114,7 @@
       </div>`;
       document.body.appendChild(bg);
       const sheet = $('.sheet', bg);
-      const current = () => parsed.txns.map((t) => (flip ? { ...t, amount: -t.amount } : t));
+      const current = () => signed(parsed.txns.map((t) => (flip ? { ...t, amount: -t.amount } : t)), acct);
       const preview = () => {
         const list = current();
         const outs = list.filter((t) => t.amount < 0).length;
@@ -962,6 +1125,7 @@
             : '<tr><td colspan="3" style="text-align:center" class="muted">⋯</td></tr>').join('')}</tbody></table>`;
       };
       $('#p-flip', sheet).addEventListener('change', (e) => { flip = e.target.checked; preview(); });
+      $('#p-acct', sheet).addEventListener('change', (e) => { acct = e.target.value; preview(); });
       preview();
       let result = null;
       const prevBack = popBack;
@@ -970,14 +1134,14 @@
       sheet.addEventListener('click', (e) => {
         const x = e.target.closest('[data-x]');
         if (!x) return;
-        if (x.dataset.x === 'ok') result = current();
+        if (x.dataset.x === 'ok') result = { txns: current(), acct };
         close();
       });
       bg.addEventListener('click', (e) => { if (e.target === bg) close(); });
     });
   }
 
-  function mappingSheet(name, rows) {
+  function mappingSheet(name, rows, acct) {
     return new Promise((resolve) => {
       const cfg = SC.guessMapping(rows);
       const ncols = Math.max(cfg.ncols, ...rows.slice(0, 50).map((r) => r.length));
@@ -990,6 +1154,8 @@
       bg.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="map-title">
         <h2 id="map-title">Check the columns</h2>
         <p class="sub ellipsis">${esc(name)}</p>
+        <label class="small muted" for="m-acct">Account</label>
+        ${accountSelect(acct, 'id="m-acct" style="margin:4px 0 10px"')}
         <div class="map-grid">
           <label for="m-date">Date</label><select id="m-date">${opts(cfg.map.date)}</select>
           <label for="m-desc">Description</label><select id="m-desc">${opts(cfg.map.desc)}</select>
@@ -1012,10 +1178,12 @@
       const sheet = $('.sheet', bg);
       const read = () => {
         const v = (id) => +$('#' + id, sheet).value;
-        cfg.map = { date: v('m-date'), desc: v('m-desc'), amount: v('m-amount'), debit: v('m-debit'), credit: v('m-credit'), balance: v('m-balance') };
+        cfg.map = { date: v('m-date'), desc: v('m-desc'), amount: v('m-amount'), debit: v('m-debit'), credit: v('m-credit'), balance: v('m-balance'), dc: cfg.map.dc };
         cfg.dateOrder = $('#m-order', sheet).value;
         cfg.flip = $('#m-flip', sheet).checked;
-        return SC.applyMapping(rows, cfg);
+        acct = $('#m-acct', sheet).value;
+        const res = SC.applyMapping(rows, cfg);
+        return { ...res, txns: signed(res.txns, acct) };
       };
       const preview = () => {
         const { txns, skipped } = read();
@@ -1035,7 +1203,7 @@
       sheet.addEventListener('click', (e) => {
         const x = e.target.closest('[data-x]');
         if (!x) return;
-        if (x.dataset.x === 'ok') result = read().txns;
+        if (x.dataset.x === 'ok') result = { txns: read().txns, acct };
         close();
       });
       bg.addEventListener('click', (e) => { if (e.target === bg) close(); });
@@ -1245,12 +1413,13 @@
 
   function exportCSV() {
     const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-    const lines = ['Date,Description,Payee,Amount,Balance,Category,Category source'];
+    const lines = ['Date,Account,Description,Payee,Amount,Balance,Category,Category source'];
     for (const t of [...db.txns].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))) {
       const info = cats.get(t.id);
       const c = info.cat ? catById(info.cat) : null;
       const src = { manual: 'you (this payment)', payee: 'you (payee rule)', guess: 'learned guess' }[info.source] || '';
-      lines.push([t.date, q(t.desc), q(SC.titleCase(t.merchant)), t.amount.toFixed(2), t.balance == null ? '' : t.balance.toFixed(2), q(c ? c.name : ''), q(src)].join(','));
+      const acc = accountById(t.accountId);
+      lines.push([t.date, q(acc ? ACCT.label(acc) : ''), q(t.desc), q(SC.titleCase(t.merchant)), t.amount.toFixed(2), t.balance == null ? '' : t.balance.toFixed(2), q(c ? c.name : ''), q(src)].join(','));
     }
     download(lines.join('\n'), 'text/csv', `statement-check-transactions-${new Date().toISOString().slice(0, 10)}.csv`);
     toast('Transactions exported.');
@@ -1275,7 +1444,7 @@
   });
 
   function commit(name, parsed) {
-    commitMany([{ name, txns: parsed }]);
+    commitMany([{ name, txns: parsed, acct: suggestAccount(null) }]);
   }
 
   // Adds files' transactions, skipping any already loaded (overlapping
@@ -1284,21 +1453,24 @@
     let added = 0;
     let dupes = 0;
     let filesAdded = 0;
+    const made = new Map();
     for (const f of files) {
       if (!f.txns.length) continue;
+      const acc = resolveAccount(f.acct, f.detected, made);
+      db.settings.lastAccount = acc.id;
       const importId = 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const existing = new Set(db.txns.map((t) => t.id));
       const fresh = [];
       let removed = 0;
-      SC.assignIds(f.txns).forEach((t, seq) => {
+      ACCT.idsFor(signed(f.txns, acc.id), acc.id).forEach((t, seq) => {
         if (db.deleted[t.id]) { removed++; return; }
-        if (!existing.has(t.id)) fresh.push({ ...t, merchant: db.aliases[t.merchant] || t.merchant, importId, seq });
+        if (!existing.has(t.id)) fresh.push({ ...t, merchant: db.aliases[t.merchant] || t.merchant, importId, seq, accountId: acc.id });
       });
       const d = f.txns.length - fresh.length - removed;
       dupes += d;
       if (!fresh.length) continue; // nothing new: don't list an empty import
       const dates = f.txns.map((t) => t.date).sort();
-      db.imports.push({ id: importId, name: f.name, count: fresh.length, dupes: d, from: dates[0], to: dates[dates.length - 1], added: new Date().toISOString() });
+      db.imports.push({ id: importId, accountId: acc.id, name: f.name, count: fresh.length, dupes: d, from: dates[0], to: dates[dates.length - 1], closing: f.closing == null ? null : f.closing, added: new Date().toISOString() });
       db.txns.push(...fresh);
       added += fresh.length;
       filesAdded++;
@@ -1322,9 +1494,8 @@
         return;
       }
       if (db.txns.length && !confirm('Replace everything on this device with the backup?')) return;
-      db = Object.assign(blank(), data);
+      adopt(data);
       delete db.app; delete db.version; delete db.saved;
-      if (!db.cats || !Array.isArray(db.cats.list)) db.cats = CAT.freshState();
       save();
       reanalyse();
       toast('Backup restored.');
@@ -1343,7 +1514,7 @@
   let restoring = false;
 
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('button, [data-merchant], [data-cat-txn], [data-catfilter]');
+    const t = e.target.closest('button, [data-merchant], [data-cat-txn], [data-catfilter], [data-acct-view]');
     if (!t) return;
     const d = t.dataset;
     if (d.tab) return go(d.tab);
@@ -1380,6 +1551,24 @@
     }
     if (d.merchant) { ui.q = d.merchant; ui.txFilter = 'all'; return go('transactions'); }
     if (d.month) { ui.q = d.month; ui.txFilter = 'out'; return go('transactions'); }
+    if (d.acctView) {
+      ui.account = d.acctView;
+      ui.sev = 'all';
+      if (tab === 'files') tab = 'alerts';
+      return go(tab);
+    }
+    if (d.acctRename) {
+      const a = accountById(d.acctRename);
+      const name = a && prompt('Name for this account or card:', a.name);
+      if (!name || !name.trim()) return;
+      a.name = name.trim().slice(0, 40);
+      save(); return render();
+    }
+    if (d.acctDelete) {
+      db.accounts = db.accounts.filter((a) => a.id !== d.acctDelete || db.txns.some((t) => t.accountId === a.id));
+      if (ui.account === d.acctDelete) ui.account = 'all';
+      save(); reanalyse(); return render();
+    }
     if (d.remove) {
       const im = db.imports.find((x) => x.id === d.remove);
       if (!im || !confirm(`Remove ${im.name} and its ${im.count} transactions?`)) return;
@@ -1428,6 +1617,7 @@
       case 'wipe':
         if (!confirm('Delete every statement and setting from this device? This cannot be undone.')) return;
         db = Object.assign(blank(), { settings: db.settings });
+        ui.account = 'all';
         save(); reanalyse(); render(); toast('All data deleted.');
         break;
     }
@@ -1448,6 +1638,16 @@
   document.addEventListener('change', (e) => {
     if (e.target.id === 'cat-filter') { ui.cat = e.target.value; ui.txLimit = 300; return render(); }
     if (e.target.id === 'lock-timeout') { lockMeta.timeout = +e.target.value; writeMeta(); return toast('Saved.'); }
+    if (e.target.dataset.acctType) {
+      const a = accountById(e.target.dataset.acctType);
+      if (!a) return;
+      const wasCard = a.type === 'card';
+      a.type = e.target.value;
+      if (Object.values(ACCT.TYPES).includes(a.name)) a.name = ACCT.defaultName(a.type); // still the default name
+      save(); reanalyse(); render();
+      if (wasCard !== (a.type === 'card')) toast("Changed. Card spending already loaded keeps its signs — reload the statement if they're back to front.");
+      return;
+    }
     if (e.target.id === 'remind-day' || e.target.id === 'remind-hour') {
       const wasOff = remind.day == null;
       const v = $('#remind-day').value;

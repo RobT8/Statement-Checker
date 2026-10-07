@@ -103,7 +103,7 @@
   }
 
   function readHeader(line) {
-    const roles = line.cells.map((c) => ({ role: classifyHeading(c.text), x0: c.x0, x1: c.x1, cx: (c.x0 + c.x1) / 2 }));
+    const roles = line.cells.map((c) => ({ role: classifyHeading(c.text), text: c.text, x0: c.x0, x1: c.x1, cx: (c.x0 + c.x1) / 2 }));
     const has = (r) => roles.some((x) => x.role === r);
     const money = ['debit', 'credit', 'balance', 'amount'].filter(has);
     if (!has('date') || !money.length) return null;
@@ -195,7 +195,38 @@
     const trial = classify(lines, { order, year: latest, month: 0 });
     const rows = classify(lines, { order, year: latest - (trial.endYear - latest), month: 0 }).rows;
     result.columns = rows.some((r) => r.kind === 'header');
+    result.account = detectAccount(allText);
+    result.statementBalance = statementBalance(lines);
     return buildTxns(rows, result);
+  }
+
+  // Which account the statement is for: a card (credit limit and minimum
+  // payment, or a masked 16-digit card number) or a bank account (sort code
+  // and account number). last4 tells two accounts of the same kind apart.
+  function detectAccount(textLines) {
+    const t = textLines.join('\n');
+    const masked = t.match(/(?:[*xX•]{4}[\s-]?){3}(\d{4})\b/) || t.match(/card (?:number )?ending(?: in)?:?\s*(\d{4})\b/i);
+    const sortCode = /sort code/i.test(t);
+    const card = (/credit limit/i.test(t) && /minimum payment/i.test(t)) || (!!masked && !sortCode);
+    let last4 = '';
+    if (card && masked) last4 = masked[1];
+    else {
+      const acc = t.match(/account (?:number|no\.?)\s*:?\s*(\d{8})\b/i) || t.match(/\b\d{2}-\d{2}-\d{2}\s+(\d{8})\b/);
+      if (acc) last4 = acc[1].slice(-4);
+    }
+    return { type: card ? 'card' : 'current', last4 };
+  }
+
+  // The statement's closing balance from its summary ("New balance £412.30"),
+  // which is all a card statement offers. Null if there isn't one.
+  function statementBalance(lines) {
+    const re = /\b(?:new|closing|statement|current) balance\b[^\d£$€-]{0,20}(-?[£$€]?\s?[\d,]+\.\d{2}(?:\s?(?:CR|DR|OD|D)\b)?)/i;
+    for (const l of lines) {
+      const m = l.cells.map((c) => c.text).join(' ').match(re);
+      const v = m ? SC.parseAmount(m[1]) : null;
+      if (v !== null) return v;
+    }
+    return null;
   }
 
   // Narrow columns wrap their headings ("Paid" over "In(£)"). Fold short
@@ -241,7 +272,17 @@
       if (header) { cols = header; rows.push({ kind: 'header' }); continue; }
       const text = l.cells.map((c) => c.text).join(' ');
       const dated = leadingDate(l.cells, ctx);
-      const rest = dated ? l.cells.slice(dated.used) : l.cells;
+      let rest = dated ? l.cells.slice(dated.used) : l.cells;
+      // Card statements often give two dates: when you spent and when it was
+      // posted. Keep the transaction date, whichever column it's in.
+      const dateCols = cols ? cols.filter((c) => c.role === 'date') : [];
+      if (dated && dateCols.length >= 2) {
+        const second = leadingDate(rest, { ...ctx });
+        if (second) {
+          rest = rest.slice(second.used);
+          if (/trans/i.test(dateCols[1].text) && !/trans/i.test(dateCols[0].text)) dated.date = second.date;
+        }
+      }
       const money = rest.filter((c) => MONEY_RE.test(c.text));
       const words = rest.filter((c) => !MONEY_RE.test(c.text));
       rows.push({ kind: 'line', page: l.page, y: l.y, date: dated ? dated.date : null, money, words, text, cols, skip: SKIP_RE.test(text), noise: NOISE_RE.test(text) });
@@ -379,7 +420,7 @@
     return pages;
   }
 
-  const api = { linesFromPages, splitMoneyCells, parseStatement, pagesFromPdf, MONEY_RE };
+  const api = { detectAccount, statementBalance, linesFromPages, splitMoneyCells, parseStatement, pagesFromPdf, MONEY_RE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PDFS = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -4,10 +4,10 @@
 // REMIND_CACHE (just the day, hour and when a statement was last loaded).
 importScripts('remind.js');
 
-const CACHE = 'statement-check-v8';
+const CACHE = 'statement-check-v9';
 const REMIND_CACHE = 'statement-check-remind';
 const REMIND_URL = './__remind.json';
-const FILES = ['./', 'index.html', 'app.js', 'analyse.js', 'categorise.js', 'pdfstatement.js', 'lock.js', 'remind.js', 'vendor/pdfjs/pdf.min.mjs', 'vendor/pdfjs/pdf.worker.min.mjs', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
+const FILES = ['./', 'index.html', 'app.js', 'analyse.js', 'categorise.js', 'pdfstatement.js', 'lock.js', 'remind.js', 'accounts.js', 'vendor/pdfjs/pdf.min.mjs', 'vendor/pdfjs/pdf.worker.min.mjs', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));

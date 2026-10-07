@@ -27,8 +27,8 @@ dates) and like visual explanations and analogies.
    vendored (pdf.js lives in `vendor/pdfjs`).
 2. **No build step.** Plain HTML/CSS/JS files served as-is. Pure logic files
    use a UMD-style footer: `module.exports` under Node, a global in the
-   browser (`SC`, `CAT`, `PDFS`, `LOCK`, `REMIND`).
-3. **Bump `CACHE` in `sw.js`** (currently `statement-check-v8`) whenever any
+   browser (`SC`, `CAT`, `PDFS`, `LOCK`, `REMIND`, `ACCT`).
+3. **Bump `CACHE` in `sw.js`** (currently `statement-check-v9`) whenever any
    file changes, and add new files to its `FILES` list, or installed copies
    keep the old version and break offline.
 4. **Escape everything from statements** with `esc()` before it goes into
@@ -47,9 +47,10 @@ dates) and like visual explanations and analogies.
 | `pdfstatement.js` (`PDFS`) | Rebuilds statement tables from pdf.js text positions |
 | `lock.js` (`LOCK`) | PBKDF2 (600k) → AES-256-GCM encryption for the app lock, weak-code check, lockout timing |
 | `remind.js` (`REMIND`) | Monthly reminder dates: when it's due, snooze, once-a-month notify, `.ics` calendar file |
+| `accounts.js` (`ACCT`) | Accounts and cards: migration, matching a statement to an account, per-account ids, card signs, balances and the two totals |
 | `sw.js` | Network-first service worker, cache for offline; shows the reminder notification on `periodicsync` |
-| `*.test.js` | `node --test` suites (40 tests, all passing) |
-| `test-fixtures/` | Four generated fake PDF statements + expected JSON. `make-fixtures.js` rebuilds them (needs Playwright). |
+| `*.test.js` | `node --test` suites (48 tests, all passing) |
+| `test-fixtures/` | Five generated fake PDF statements + expected JSON (`layout-e` is a card with transaction + posting dates). `make-fixtures.js [name…]` rebuilds them (needs Playwright). |
 
 ## Commands
 
@@ -71,8 +72,10 @@ appears in the same command. Use a bracket pattern like `"http.server 800[0]"`.
 ## Data model (browser storage)
 
 - `statement-check.v1`: everything, as plaintext JSON, **only when the app
-  lock is off**: `{ imports, txns, dismissed, mutes, aliases, deleted,
+  lock is off**: `{ accounts, imports, txns, dismissed, mutes, aliases, deleted,
   settings, cats: { list, txnCats, payeeCats } }`.
+  `accounts`: `[{ id, name, type: current|savings|card, last4 }]`; imports and
+  txns carry `accountId`; imports may carry `closing` (statement balance).
 - `statement-check.v1.enc`: `{ v, iv, ct }`, the same object AES-GCM
   encrypted, **when the lock is on**. The plaintext key is then removed.
 - `statement-check.v1.lock`: lock metadata `{ salt, iter, timeout, fails, until }` (not secret).
@@ -83,7 +86,9 @@ appears in the same command. Use a bracket pattern like `"http.server 800[0]"`.
   read it; `sw.js` must not delete that cache on activate.
 
 Transaction: `{ id, date 'YYYY-MM-DD', desc, amount (<0 = out), balance|null,
-merchant, importId, seq, edited? }`. The `id` is `date|amount|desc#n` and
+merchant, importId, seq, accountId, edited? }`. The `id` is `date|amount|desc#n`
+(prefixed `<accountId>|` for every account except `main`, the first one, so
+pre-accounts data kept its ids) and
 dedupes overlapping imports. **Never change an id when editing**: edits and
 deletions survive re-imports because the id stays the same.
 
@@ -104,6 +109,11 @@ through the `saving` promise). Always go through `save()`.
   confidence signal.
 - **Guesses** need ≥ 60% confidence, and conflicting evidence gives no guess.
 - **Category alerts** need ≥ 3 months, ≥ 50% *and* ≥ £50 over the median month.
+- **Accounts:** card repayments are **not** netted against card spending (owner's
+  choice): they stay a real payment out of the current account. Card spending
+  uses the transaction date, not the posting date. Totals are two figures,
+  "In accounts" and "Owed on cards", never one net figure. Alerts in the All
+  view are grouped per account. Each account is analysed separately.
 - **App lock:** 6 digits, encryption rather than just a gate. Honest limits
   were explained to the owner: a million combinations, so it's weak against
   offline brute force, and backups/CSV exports are **not** encrypted.
@@ -114,7 +124,12 @@ Everything requested so far is done and live: anomaly alerts; learning
 categories with corrections; category spending alerts; editing, renaming
 and merging payees; PDF import (tuned for NatWest); batch import; app lock;
 monthly statement reminder (in-app banner, best-effort phone notification via
-Periodic Background Sync, `.ics` calendar fallback).
+Periodic Background Sync, `.ics` calendar fallback); multiple accounts and
+credit cards (owner has NatWest current + Tesco credit card).
+
+- **Real Tesco card statement not yet seen.** Card support is built from a
+  fake fixture (`layout-e`). Ask for a blurred screenshot of the import review
+  screen if dates, signs or the balance look wrong.
 
 Open / next:
 

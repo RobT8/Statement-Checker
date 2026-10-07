@@ -67,6 +67,27 @@ the app's storage. A 6-digit code has a million combinations, so a determined
 attacker who copied the encrypted data off the phone could eventually try
 them all. The phone's own screen lock and encryption remain the first line.
 
+## Accounts and credit cards
+
+Each statement belongs to an account: current, savings or credit card. A PDF
+says which: a sort code and account number mean a bank account, a credit
+limit and minimum payment (or a masked card number) mean a card, and the
+last 4 digits match it to one you've loaded before. A CSV or OFX gets the
+account you used last; the import screen has an **Account** picker either way.
+
+- **Card spending** is always stored as money out (positive card exports are
+  turned round), and dated by the **transaction date**, not the posting date.
+- **Paying the card off** stays a real payment from the current account and a
+  payment in on the card. It isn't netted off.
+- Chips at the top of Alerts, Transactions and Insights show **All** or one
+  account. The All view of Alerts lists each account's balance and two totals,
+  **In accounts** and **Owed on cards**, then alerts grouped by account, with
+  category alerts under "Across all accounts".
+- Each account is checked on its own, so balance checks, missing income and
+  "large for you" compare like with like.
+- A card's balance comes from its statement summary ("New balance"); a bank
+  account's from the last running balance.
+
 ## Monthly reminder
 
 Statements → **Monthly reminder**: pick a day (1st–28th or the last day) and a
@@ -163,6 +184,6 @@ python3 -m http.server 8000   # then open http://localhost:8000
 node --test                   # engine tests (run from this folder)
 ```
 
-`analyse.js` is the pure parsing and detection engine, `categorise.js` the category learning, `pdfstatement.js` the PDF reader `lock.js` the app lock's encryption and `remind.js` the reminder dates, shared by the page and
+`analyse.js` is the pure parsing and detection engine, `categorise.js` the category learning, `pdfstatement.js` the PDF reader `lock.js` the app lock's encryption, `remind.js` the reminder dates and `accounts.js` accounts and totals, shared by the page and
 the tests. `app.js` is the UI. `sw.js` caches the app's own files for offline use.
 Bump `CACHE` in `sw.js` when you change any file.

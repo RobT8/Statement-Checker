@@ -183,7 +183,7 @@
       stats.push({ dates, nums, negs, textLen, fill: nonEmpty.length / (vals.length || 1) });
     }
 
-    const map = { date: -1, desc: -1, amount: -1, debit: -1, credit: -1, balance: -1 };
+    const map = { date: -1, desc: -1, amount: -1, debit: -1, credit: -1, balance: -1, dc: -1 };
     const used = new Set();
     const take = (key, idx) => { if (idx >= 0 && !used.has(idx)) { map[key] = idx; used.add(idx); } };
     const findHeader = (re, not) => {
@@ -197,6 +197,8 @@
       if (d < 0 || stats[d].dates < 0.5) d = findHeader(/date/i);
       take('date', d);
       take('balance', findHeader(/balance/i));
+      // Card exports: unsigned amounts with a separate "Debit/Credit" flag.
+      take('dc', findHeader(/^(debit\s*\/\s*credit|credit\s*\/\s*debit|dr\s*\/\s*cr|cr\s*\/\s*dr|d\s*\/\s*c)\b/i));
       take('debit', findHeader(/debit|paid out|money out|withdraw|spent|^out$|outgoing/i, /credit|card|type/i));
       take('credit', findHeader(/credit|paid in|money in|deposit|received|^in$|incoming/i, /card|type|debit/i));
       take('amount', findHeader(/^amount$|^amount\b|^value$|^sum$/i, /local|original|foreign/i));
@@ -256,6 +258,11 @@
         if (dr !== null || cr !== null) amount = (cr ? Math.abs(cr) : 0) - (dr ? Math.abs(dr) : 0);
       }
       if (!date || amount === null || amount === 0) { skipped++; return; }
+      if (map.dc >= 0) {
+        const f = String(r[map.dc] || '').trim();
+        if (/^(c|cr|credit)\b/i.test(f)) amount = Math.abs(amount);
+        else if (/^(d|dr|debit)\b/i.test(f)) amount = -Math.abs(amount);
+      }
       if (flip) amount = -amount;
       let desc = map.desc >= 0 ? r[map.desc] || '' : '';
       if (!desc) desc = r.filter((c, i) => i !== map.date && parseAmount(c) === null && c).join(' ') || '(no description)';

@@ -153,6 +153,10 @@
     .chip[aria-pressed="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
 
     .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .acct-sum .tiles { grid-template-columns: 1fr 1fr; }
+    .acct-chips { margin-top: 14px; }
+    .acct-chips .chip { white-space: nowrap; flex: none; }
+    .group-h { margin-top: 22px; }
     .tile { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; min-width: 0; }
     .tile .k { font-size: 12px; color: var(--text2); }
     .tile .v { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -270,6 +274,7 @@
   <script src="pdfstatement.js"></script>
   <script src="lock.js"></script>
   <script src="remind.js"></script>
+  <script src="accounts.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

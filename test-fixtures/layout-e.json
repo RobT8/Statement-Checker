@@ -1,0 +1,145 @@
+{
+ "owed": 4057.04,
+ "txns": [
+  {
+   "date": "2026-05-03",
+   "desc": "CARD PAYMENT TO AMAZON",
+   "amount": -8.42
+  },
+  {
+   "date": "2026-05-04",
+   "desc": "SHELL PETROL",
+   "amount": -59.67
+  },
+  {
+   "date": "2026-05-04",
+   "desc": "DD OCTOPUS ENERGY",
+   "amount": -88.63
+  },
+  {
+   "date": "2026-05-05",
+   "desc": "FASTER PAYMENT TO J SMITH",
+   "amount": -576.96
+  },
+  {
+   "date": "2026-05-05",
+   "desc": "DD OCTOPUS ENERGY",
+   "amount": -91.23
+  },
+  {
+   "date": "2026-05-07",
+   "desc": "CARD PAYMENT TO AMAZON",
+   "amount": -1197.32
+  },
+  {
+   "date": "2026-05-08",
+   "desc": "COSTA COFFEE",
+   "amount": -4.62
+  },
+  {
+   "date": "2026-05-08",
+   "desc": "SAINSBURYS S/MKT",
+   "amount": -786.16
+  },
+  {
+   "date": "2026-05-09",
+   "desc": "PAYMENT RECEIVED - THANK YOU",
+   "amount": 250
+  },
+  {
+   "date": "2026-05-11",
+   "desc": "TESCO STORES 3021",
+   "amount": -89.09
+  },
+  {
+   "date": "2026-05-11",
+   "desc": "SAINSBURYS S/MKT",
+   "amount": -37.43
+  },
+  {
+   "date": "2026-05-17",
+   "desc": "NETFLIX.COM",
+   "amount": -5.88
+  },
+  {
+   "date": "2026-05-19",
+   "desc": "TESCO STORES 3021",
+   "amount": -82.94
+  },
+  {
+   "date": "2026-05-19",
+   "desc": "NETFLIX.COM",
+   "amount": -84.51
+  },
+  {
+   "date": "2026-05-21",
+   "desc": "SAINSBURYS S/MKT",
+   "amount": -54.05
+  },
+  {
+   "date": "2026-05-21",
+   "desc": "NETFLIX.COM",
+   "amount": -341.35
+  },
+  {
+   "date": "2026-05-22",
+   "desc": "TESCO STORES 3021",
+   "amount": -45.09
+  },
+  {
+   "date": "2026-05-22",
+   "desc": "SHELL PETROL",
+   "amount": -59.67
+  },
+  {
+   "date": "2026-05-23",
+   "desc": "NETFLIX.COM",
+   "amount": -69.09
+  },
+  {
+   "date": "2026-05-23",
+   "desc": "PAYMENT RECEIVED - THANK YOU",
+   "amount": 250
+  },
+  {
+   "date": "2026-05-24",
+   "desc": "SAINSBURYS S/MKT",
+   "amount": -95.92
+  },
+  {
+   "date": "2026-05-24",
+   "desc": "CARD PAYMENT TO AMAZON",
+   "amount": -106.34
+  },
+  {
+   "date": "2026-05-25",
+   "desc": "NETFLIX.COM",
+   "amount": -33.79
+  },
+  {
+   "date": "2026-05-28",
+   "desc": "SAINSBURYS S/MKT",
+   "amount": -85.91
+  },
+  {
+   "date": "2026-05-30",
+   "desc": "SHELL PETROL",
+   "amount": -64.08
+  },
+  {
+   "date": "2026-05-30",
+   "desc": "TESCO STORES 3021",
+   "amount": -98.77
+  },
+  {
+   "date": "2026-05-31",
+   "desc": "CARD PAYMENT TO AMAZON",
+   "amount": -106.42
+  },
+  {
+   "date": "2026-05-31",
+   "desc": "TESCO STORES 3021",
+   "amount": -33.7
+  }
+ ]
+}

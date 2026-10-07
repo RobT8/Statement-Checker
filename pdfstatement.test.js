@@ -31,6 +31,7 @@ test('PDF: HSBC style — balance once a day, wrapping above the amount, across 
 
 test('PDF: credit card — one amount column, CR for payments, no balance', async () => {
   const r = await readPdf('layout-c.pdf');
+  assert.deepEqual(r.account, { type: 'card', last4: '4321' });
   assert.deepEqual(simple(r.txns), expected('layout-c'));
   assert.equal(r.hasBalance, false);
 });
@@ -58,4 +59,17 @@ test('PDF: NatWest layout — Paid In before Withdrawn, wrapped headings, type +
   assert.deepEqual(simple(r.txns), expected('layout-d'));
   assert.ok(r.txns.some((t) => t.balance < 0), 'an overdrawn (OD) balance was read as negative');
   assert.equal(r.balanceOk, r.balanceChecked);
+});
+
+test('PDF: card with transaction and posting dates — keeps the date you spent, finds the card and its balance', async () => {
+  const r = await readPdf('layout-e.pdf');
+  const exp = expected('layout-e');
+  assert.deepEqual(simple(r.txns), exp.txns);
+  assert.deepEqual(r.account, { type: 'card', last4: '5678' });
+  assert.equal(r.statementBalance, exp.owed);
+});
+
+test('PDF: a current account is recognised by its sort code and account number', async () => {
+  const r = await readPdf('layout-d.pdf');
+  assert.deepEqual(r.account, { type: 'current', last4: '5678' });
 });
