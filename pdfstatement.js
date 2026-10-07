@@ -107,6 +107,9 @@
     const has = (r) => roles.some((x) => x.role === r);
     const money = ['debit', 'credit', 'balance', 'amount'].filter(has);
     if (!has('date') || !money.length) return null;
+    // A summary box ("Statement date | New balance") is not the transaction
+    // table: that has a description or an amount column.
+    if (!has('desc') && !['debit', 'credit', 'amount'].some(has)) return null;
     // Some statements put "Paid out" and "Paid in" in one cell; split by text.
     return roles.filter((r) => r.role);
   }
@@ -178,12 +181,20 @@
 
   function parseStatement(pages, options) {
     const opts = options || {};
-    const lines = mergeHeaderLines(linesFromPages(pages).map((l) => ({ ...l, cells: splitMoneyCells(l.cells) })));
-    const textCount = lines.reduce((n, l) => n + l.cells.length, 0);
-    const result = { txns: [], skipped: 0, hasBalance: false, balanceChecked: 0, balanceOk: 0, scanned: textCount < 15, columns: null };
+    const all = mergeHeaderLines(linesFromPages(pages).map((l) => ({ ...l, cells: splitMoneyCells(l.cells) })));
+    const textCount = all.reduce((n, l) => n + l.cells.length, 0);
+    const result = { txns: [], skipped: 0, hasBalance: false, balanceChecked: 0, balanceOk: 0, scanned: textCount < 15, columns: null, pages: pages.length, fromPage: 0 };
     if (result.scanned) return result;
 
-    const years = findYears(lines);
+    // Front pages (summary, interest rates, small print) come before the
+    // transaction table: start at the page where its headings first appear,
+    // or at the page chosen on the import screen.
+    const firstHeader = all.find((l) => readHeader(l));
+    result.fromPage = opts.fromPage != null ? opts.fromPage : firstHeader ? firstHeader.page : 0;
+    const startAt = opts.fromPage == null && firstHeader ? all.indexOf(firstHeader) : all.findIndex((l) => l.page >= result.fromPage);
+    const lines = startAt < 0 ? [] : all.slice(startAt);
+
+    const years = findYears(all);
     const allText = lines.map((l) => l.cells.map((c) => c.text).join(' '));
     const order = opts.dateOrder || SC.detectDateOrder(allText.flatMap((t) => t.split(' ')));
     // Year-less dates ("05 Mar") take their year from the statement. The year
@@ -195,8 +206,9 @@
     const trial = classify(lines, { order, year: latest, month: 0 });
     const rows = classify(lines, { order, year: latest - (trial.endYear - latest), month: 0 }).rows;
     result.columns = rows.some((r) => r.kind === 'header');
-    result.account = detectAccount(allText);
-    result.statementBalance = statementBalance(lines);
+    const everything = all.map((l) => l.cells.map((c) => c.text).join(' '));
+    result.account = detectAccount(everything);
+    result.statementBalance = statementBalance(all);
     return buildTxns(rows, result);
   }
 
@@ -225,6 +237,18 @@
       const m = l.cells.map((c) => c.text).join(' ').match(re);
       const v = m ? SC.parseAmount(m[1]) : null;
       if (v !== null) return v;
+    }
+    // A heading in a box with the figure underneath it.
+    for (let i = 0; i < lines.length; i++) {
+      const head = lines[i].cells.find((c) => /^(new|closing|statement|current) balance\b/i.test(c.text));
+      if (!head) continue;
+      const cx = (head.x0 + head.x1) / 2;
+      for (const l of lines.slice(i + 1, i + 3)) {
+        if (l.page !== lines[i].page) break;
+        const below = l.cells.filter((c) => MONEY_RE.test(c.text.replace(/^[£$€]\s?/, '')))
+          .map((c) => ({ c, d: Math.abs((c.x0 + c.x1) / 2 - cx) })).sort((x, y) => x.d - y.d)[0];
+        if (below && (below.c.x0 < head.x1 + 20 && below.c.x1 > head.x0 - 20)) return SC.parseAmount(below.c.text);
+      }
     }
     return null;
   }
@@ -420,7 +444,42 @@
     return pages;
   }
 
-  const api = { detectAccount, statementBalance, linesFromPages, splitMoneyCells, parseStatement, pagesFromPdf, MONEY_RE };
+  // ------------------------------------------------------- anonymising ----
+
+  // A copy of the page layout that can be shared to fix a misread: positions
+  // stay, words become "Xxxx" unless they're common statement vocabulary,
+  // and long numbers (card, account, reference) become random digits. Dates
+  // and amounts stay, as they're what the reader has to find.
+  const KEEP_WORDS = new Set(('date dates transaction transactions trans posting posted post description details detail ' +
+    'amount amounts balance balances paid in out money credit credits debit debits cr dr od payment payments received ' +
+    'thank you new previous opening closing minimum limit available statement total totals page of interest brought ' +
+    'carried forward card account sort code from to period purchases purchase cash fee fees charge charges direct ' +
+    'your due rate rates and the for on at value reference ref type withdrawn withdrawals deposits merchant ' +
+    'january february march april may june july august september october november december ' +
+    'jan feb mar apr jun jul aug sep sept oct nov dec mon tue wed thu fri sat sun').split(' '));
+
+  function scramble(str) {
+    return String(str)
+      .replace(/\b\d{2}-\d{2}-\d{2}\b/g, () => '00-00-00')
+      .replace(/[A-Za-z]+|\d[\d,.]*/g, (tok) => {
+        if (/^[A-Za-z]+$/.test(tok)) return KEEP_WORDS.has(tok.toLowerCase()) ? tok : tok.replace(/[a-z]/g, 'x').replace(/[A-Z]/g, 'X');
+        if (/^\d{1,3}(,\d{3})*\.\d{2}$|^\d+\.\d{2}$/.test(tok)) return tok; // money
+        const digits = tok.replace(/\D/g, '');
+        if (digits.length <= 2 || (digits.length === 4 && /^(19|20)\d\d$/.test(tok))) return tok; // days, months, years
+        if (/^\d{1,2}[./]\d{1,2}[./]\d{2,4}$/.test(tok)) return tok; // 05/03/2026
+        return tok.replace(/\d/g, () => String(Math.floor(Math.random() * 10)));
+      });
+  }
+
+  function anonymise(pages) {
+    return {
+      app: 'statement-check-layout',
+      v: 1,
+      pages: pages.map((pg) => ({ items: pg.items.map((it) => ({ str: scramble(it.str), x: it.x, y: it.y, w: it.w, h: it.h })) })),
+    };
+  }
+
+  const api = { anonymise, scramble, detectAccount, statementBalance, linesFromPages, splitMoneyCells, parseStatement, pagesFromPdf, MONEY_RE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PDFS = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

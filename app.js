@@ -852,8 +852,8 @@
     if (t && t.textContent.startsWith('Reading ')) t.remove();
     if (e.status === 'error') return toast(`${e.name}: ${e.note}`);
     if (e.kind !== 'pdf' && e.kind !== 'csv') return batchImport(files, [e]); // OFX/QIF: just pick the account
-    const r = e.kind === 'pdf' ? await pdfSheet(e.name, e.parsed, e.acct) : await mappingSheet(e.name, e.rows, e.acct);
-    if (r) commitMany([{ ...e, txns: r.txns, acct: r.acct }]);
+    const r = e.kind === 'pdf' ? await pdfSheet(e.name, e.parsed, e.acct, e.pages) : await mappingSheet(e.name, e.rows, e.acct);
+    if (r) commitMany([{ ...e, txns: r.txns, acct: r.acct, closing: r.parsed ? r.parsed.statementBalance : e.closing }]);
   }
 
   // ---------------------------------------------------------- accounts ----
@@ -924,8 +924,9 @@
       if (!pages) { e.note = "couldn't be opened as a PDF"; return e; }
       const parsed = PDFS.parseStatement(pages);
       e.parsed = parsed;
+      e.pages = pages;
       if (parsed.scanned) { e.note = 'a scanned image with no text, so it can’t be read'; return e; }
-      if (!parsed.txns.length) { e.note = 'no transactions found'; return e; }
+      if (!parsed.txns.length) { e.status = 'warn'; e.note = 'no transactions found — tap Check to pick the page'; return e; }
       e.txns = parsed.txns;
       e.detected = parsed.account;
       e.closing = parsed.statementBalance;
@@ -1032,9 +1033,9 @@
       if (!b) return;
       if (b.dataset.check !== undefined) {
         const e = entries[+b.dataset.check];
-        const r = e.kind === 'pdf' ? await pdfSheet(e.name, e.parsed, e.acct) : await mappingSheet(e.name, e.rows, e.acct);
+        const r = e.kind === 'pdf' ? await pdfSheet(e.name, e.parsed, e.acct, e.pages) : await mappingSheet(e.name, e.rows, e.acct);
         popBack = close;
-        if (r) { e.txns = r.txns; e.acct = r.acct; e.include = r.txns.length > 0; e.checked = true; if (e.status === 'warn' && e.kind === 'csv') e.status = 'info'; }
+        if (r) { e.txns = r.txns; e.acct = r.acct; e.include = r.txns.length > 0; if (r.parsed) { e.parsed = r.parsed; e.closing = r.parsed.statementBalance; } e.checked = true; if (e.status === 'warn' && e.kind === 'csv') e.status = 'info'; }
         return draw();
       }
       if (b.dataset.x === 'cancel') return close();
@@ -1085,48 +1086,67 @@
   }
 
   // What was read, and how sure we are: a statement with a running balance
-  // can be checked line by line.
-  function pdfSheet(name, parsed, acct) {
+  // can be checked line by line. The page picker re-reads from a chosen page,
+  // and "Share layout" saves an anonymised copy for fixing a misread.
+  function pdfSheet(name, parsed, acct, pages) {
     return new Promise((resolve) => {
       let flip = false;
-      const dates = parsed.txns.map((t) => t.date).sort();
-      const ok = parsed.balanceChecked > 0 && parsed.balanceOk === parsed.balanceChecked;
-      const check = !parsed.balanceChecked
-        ? `<div class="card small">ℹ️ <b>This statement has no running balance</b>, so the reading can't be double-checked automatically. Compare a few rows below with your statement.</div>`
-        : ok
-          ? `<div class="card small">✅ <b>All ${parsed.balanceChecked} running balances add up</b> — the amounts and in/out were read correctly.</div>`
-          : `<div class="card small">⚠️ <b>${parsed.balanceChecked - parsed.balanceOk} of ${parsed.balanceChecked} balances don't add up.</b> Some lines may have been misread. After importing they'll show as “Balance doesn't add up” alerts, and you can fix them with Edit details.</div>`;
+      let all = false;
+      let from = ''; // '' = automatic
       const bg = document.createElement('div');
       bg.className = 'sheet-bg';
-      bg.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="pdf-title">
-        <h2 id="pdf-title">Check the PDF reading</h2>
-        <p class="sub ellipsis">${esc(name)}</p>
-        <p class="small" style="margin:0 0 8px"><b>${parsed.txns.length} transactions</b> · ${niceDate(dates[0])} – ${niceDate(dates[dates.length - 1])}</p>
-        <label class="small muted" for="p-acct">Account</label>
-        ${accountSelect(acct, 'id="p-acct" style="margin:4px 0 10px"')}
-        ${check}
-        <label class="check"><input type="checkbox" id="p-flip"> Flip signs (if spending shows as money in)</label>
-        <div id="p-preview" class="preview"></div>
-        <div class="row">
-          <button class="btn grow" data-x="cancel">Cancel</button>
-          <button class="btn primary grow" data-x="ok">Import</button>
-        </div>
-      </div>`;
+      bg.innerHTML = '<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="pdf-title"></div>';
       document.body.appendChild(bg);
       const sheet = $('.sheet', bg);
       const current = () => signed(parsed.txns.map((t) => (flip ? { ...t, amount: -t.amount } : t)), acct);
-      const preview = () => {
+      const fill = () => {
+        const n = parsed.txns.length;
+        const dates = parsed.txns.map((t) => t.date).sort();
+        const ok = parsed.balanceChecked > 0 && parsed.balanceOk === parsed.balanceChecked;
+        const check = !n
+          ? '<div class="card small">❌ <b>No transactions found from this page on.</b> Try another page below, or use <b>Share layout</b> so it can be fixed.</div>'
+          : !parsed.balanceChecked
+            ? `<div class="card small">ℹ️ <b>This statement has no running balance</b>, so the reading can't be double-checked automatically. Compare a few rows below with your statement.</div>`
+            : ok
+              ? `<div class="card small">✅ <b>All ${parsed.balanceChecked} running balances add up</b> — the amounts and in/out were read correctly.</div>`
+              : `<div class="card small">⚠️ <b>${parsed.balanceChecked - parsed.balanceOk} of ${parsed.balanceChecked} balances don't add up.</b> Some lines may have been misread. After importing they'll show as “Balance doesn't add up” alerts, and you can fix them with Edit details.</div>`;
+        const pageOpts = pages && pages.length > 1
+          ? `<option value="" ${from === '' ? 'selected' : ''}>Automatic (page ${(parsed.fromPage || 0) + 1})</option>` +
+            pages.map((_, i) => `<option value="${i}" ${String(i) === from ? 'selected' : ''}>Page ${i + 1}</option>`).join('')
+          : '';
         const list = current();
         const outs = list.filter((t) => t.amount < 0).length;
-        const rows = list.length > 10 ? [...list.slice(0, 7), null, ...list.slice(-2)] : list;
-        $('#p-preview', sheet).innerHTML = `<p class="small muted" style="margin:0 0 6px">${outs} money out, ${list.length - outs} money in.</p>
+        const rows = !all && list.length > 10 ? [...list.slice(0, 7), null, ...list.slice(-2)] : list;
+        sheet.innerHTML = `<h2 id="pdf-title">Check the PDF reading</h2>
+          <p class="sub ellipsis">${esc(name)}</p>
+          <p class="small" style="margin:0 0 8px"><b>${n} transactions</b>${n ? ` · ${niceDate(dates[0])} – ${niceDate(dates[n - 1])}` : ''}</p>
+          <label class="small muted" for="p-acct">Account</label>
+          ${accountSelect(acct, 'id="p-acct" style="margin:4px 0 10px"')}
+          ${pageOpts ? `<label class="small muted" for="p-from">Transactions start on</label>
+            <select id="p-from" style="margin:4px 0 10px">${pageOpts}</select>` : ''}
+          ${check}
+          <label class="check"><input type="checkbox" id="p-flip" ${flip ? 'checked' : ''}> Flip signs (if spending shows as money in)</label>
+          ${n ? `<p class="small muted" style="margin:0 0 6px">${outs} money out, ${n - outs} money in.</p>
           <table class="data"><tbody>${rows.map((t) => t
             ? `<tr><td>${niceDate(t.date)}</td><td style="text-align:left;max-width:150px" class="ellipsis">${esc(t.desc)}</td><td>${money(t.amount, true)}</td></tr>`
-            : '<tr><td colspan="3" style="text-align:center" class="muted">⋯</td></tr>').join('')}</tbody></table>`;
+            : '<tr><td colspan="3" style="text-align:center" class="muted">⋯</td></tr>').join('')}</tbody></table>
+          ${list.length > 10 ? `<button class="btn ghost small" data-x="all">${all ? 'Show fewer' : `Show all ${n}`}</button>` : ''}` : ''}
+          ${pages ? `<p class="small muted" style="margin:10px 0 4px">Not read right? <button class="btn ghost small" data-x="share">Share layout</button> saves a copy with names, addresses and card numbers scrambled — send it to get the reading fixed.</p>` : ''}
+          <div class="row" style="margin-top:8px">
+            <button class="btn grow" data-x="cancel">Cancel</button>
+            <button class="btn primary grow" data-x="ok" ${n ? '' : 'disabled'}>Import</button>
+          </div>`;
       };
-      $('#p-flip', sheet).addEventListener('change', (e) => { flip = e.target.checked; preview(); });
-      $('#p-acct', sheet).addEventListener('change', (e) => { acct = e.target.value; preview(); });
-      preview();
+      fill();
+      sheet.addEventListener('change', (e) => {
+        if (e.target.id === 'p-flip') flip = e.target.checked;
+        if (e.target.id === 'p-acct') acct = e.target.value;
+        if (e.target.id === 'p-from') {
+          from = e.target.value;
+          parsed = PDFS.parseStatement(pages, from === '' ? {} : { fromPage: +from });
+        }
+        fill();
+      });
       let result = null;
       const prevBack = popBack;
       const close = () => { bg.remove(); popBack = prevBack; resolve(result); };
@@ -1134,7 +1154,12 @@
       sheet.addEventListener('click', (e) => {
         const x = e.target.closest('[data-x]');
         if (!x) return;
-        if (x.dataset.x === 'ok') result = { txns: current(), acct };
+        if (x.dataset.x === 'all') { all = !all; return fill(); }
+        if (x.dataset.x === 'share') {
+          download(JSON.stringify(PDFS.anonymise(pages)), 'application/json', 'statement-layout-anonymised.json');
+          return toast('Saved statement-layout-anonymised.json — no names, addresses or card numbers in it.');
+        }
+        if (x.dataset.x === 'ok') result = { txns: current(), acct, parsed };
         close();
       });
       bg.addEventListener('click', (e) => { if (e.target === bg) close(); });

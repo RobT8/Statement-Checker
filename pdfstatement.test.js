@@ -73,3 +73,25 @@ test('PDF: a current account is recognised by its sort code and account number',
   const r = await readPdf('layout-d.pdf');
   assert.deepEqual(r.account, { type: 'current', last4: '5678' });
 });
+
+test('PDF: front pages (summary box, small print) are skipped; the table starts on page 3', async () => {
+  const r = await readPdf('layout-f.pdf');
+  const exp = expected('layout-f');
+  assert.equal(r.fromPage, 2);
+  assert.deepEqual(simple(r.txns), exp.txns);
+  assert.equal(r.statementBalance, exp.owed);
+});
+
+test('PDF: a layout can be shared without names, addresses or card numbers', () => {
+  const s = PDFS.scramble;
+  assert.equal(s('Mr John Smith'), 'Xx Xxxx Xxxxx');
+  assert.equal(s('Transaction date'), 'Transaction date');
+  assert.equal(s('03 Sep 2026'), '03 Sep 2026');
+  assert.equal(s('05/03/2026'), '05/03/2026');
+  assert.equal(s('£1,234.56 CR'), '£1,234.56 CR');
+  assert.equal(s('Sort code 60-12-34'), 'Sort code 00-00-00');
+  const card = s('4929 1234 5678 9012');
+  assert.match(card, /^\d{4} \d{4} \d{4} \d{4}$/);
+  assert.notEqual(card, '4929 1234 5678 9012');
+  assert.match(s('TESCO STORES 3021'), /^XXXXX XXXXXX \d{4}$/);
+});

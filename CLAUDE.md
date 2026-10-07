@@ -28,7 +28,7 @@ dates) and like visual explanations and analogies.
 2. **No build step.** Plain HTML/CSS/JS files served as-is. Pure logic files
    use a UMD-style footer: `module.exports` under Node, a global in the
    browser (`SC`, `CAT`, `PDFS`, `LOCK`, `REMIND`, `ACCT`).
-3. **Bump `CACHE` in `sw.js`** (currently `statement-check-v9`) whenever any
+3. **Bump `CACHE` in `sw.js`** (currently `statement-check-v10`) whenever any
    file changes, and add new files to its `FILES` list, or installed copies
    keep the old version and break offline.
 4. **Escape everything from statements** with `esc()` before it goes into
@@ -49,8 +49,8 @@ dates) and like visual explanations and analogies.
 | `remind.js` (`REMIND`) | Monthly reminder dates: when it's due, snooze, once-a-month notify, `.ics` calendar file |
 | `accounts.js` (`ACCT`) | Accounts and cards: migration, matching a statement to an account, per-account ids, card signs, balances and the two totals |
 | `sw.js` | Network-first service worker, cache for offline; shows the reminder notification on `periodicsync` |
-| `*.test.js` | `node --test` suites (48 tests, all passing) |
-| `test-fixtures/` | Five generated fake PDF statements + expected JSON (`layout-e` is a card with transaction + posting dates). `make-fixtures.js [name…]` rebuilds them (needs Playwright). |
+| `*.test.js` | `node --test` suites (50 tests, all passing) |
+| `test-fixtures/` | Six generated fake PDF statements + expected JSON (`layout-e` is a card with transaction + posting dates, `layout-f` a card whose table starts on page 3). `make-fixtures.js [name…]` rebuilds them (needs Playwright). |
 
 ## Commands
 
@@ -127,9 +127,15 @@ monthly statement reminder (in-app banner, best-effort phone notification via
 Periodic Background Sync, `.ics` calendar fallback); multiple accounts and
 credit cards (owner has NatWest current + Tesco credit card).
 
-- **Real Tesco card statement not yet seen.** Card support is built from a
-  fake fixture (`layout-e`). Ask for a blurred screenshot of the import review
-  screen if dates, signs or the balance look wrong.
+- **Tesco card PDF misreads (reported, not yet fixed).** The owner says lines
+  aren't imported properly; transactions start on page 3. Front pages are now
+  skipped (reading starts at the first transaction heading, or a page picked
+  on the check screen), but the real cause is unknown. The check screen has
+  **Share layout**, which saves `statement-layout-anonymised.json`
+  (`PDFS.anonymise`: positions kept, words → Xxxx unless statement vocabulary,
+  long numbers randomised, dates/amounts kept). When the owner sends one, load
+  it with `PDFS.parseStatement(json.pages)`, find the misread, fix it, and turn
+  it into a fixture/test.
 
 Open / next:
 

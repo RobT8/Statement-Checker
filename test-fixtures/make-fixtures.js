@@ -191,11 +191,43 @@ function layoutE() {
   return { html, expected: { owed, txns: expected(txns) } };
 }
 
+// F: card statement whose transactions start on page 3. Page 1 is a summary
+// with a dated headings box and recent-payment lines; page 2 is interest
+// rates and small print with dates and amounts. None of that is a transaction.
+function layoutF() {
+  const start = new Date(Date.UTC(2026, 7, 4));
+  let owed = 180.25;
+  const txns = makeTxns(start, 30, 0).map((t) => {
+    const pay = t.amount > 0;
+    const amount = pay ? 200 : t.amount;
+    owed = Math.round((owed - amount) * 100) / 100;
+    return { ...t, amount, lines: pay ? ['DIRECT DEBIT PAYMENT - THANK YOU'] : t.lines.slice(0, 1) };
+  });
+  const dm = (d) => `${String(d.getUTCDate()).padStart(2, '0')} ${MON[d.getUTCMonth()]} ${String(d.getUTCFullYear()).slice(2)}`;
+  const rows = txns.map((t) => {
+    const posted = new Date(t.date.getTime() + 86400000);
+    return `<tr><td>${dm(t.date)}</td><td>${dm(posted)}</td><td>${t.lines.join(' ')}</td><td class="n">${money(t.amount)}${t.amount > 0 ? ' CR' : ''}</td></tr>`;
+  }).join('');
+  const html = `<style>${css} .pb{page-break-before:always}</style>
+    <h1>Example Bank Credit Card statement</h1><p>Mr A N Other, 1 Sample Road, Exampletown EX1 1AA</p><p>Account number 1234 5678 9012 3456</p>
+    <table><thead><tr><th>Statement date</th><th>Payment due date</th><th class="n">New balance</th><th class="n">Minimum payment</th></tr></thead>
+      <tbody><tr><td>03 Sep 2026</td><td>28 Sep 2026</td><td class="n">£${money(owed)}</td><td class="n">£25.00</td></tr></tbody></table>
+    <h3>Your recent payments</h3><p>12 Aug 2026 Payment received £200.00</p>
+    <table style="white-space:nowrap"><tr><td>Credit limit £4,500.00</td><td>Available credit £4,319.75</td><td>Previous balance £180.25</td></tr></table>
+    <div class="pb"><h2>Interest and charges</h2>
+      <table><tr><td>Purchases</td><td class="n">24.9%</td><td class="n">£0.00</td></tr><tr><td>Cash</td><td class="n">29.9%</td><td class="n">£0.00</td></tr></table>
+      <p>01 Oct 2026 If you pay only the minimum each month you will pay £1,234.00 in interest.</p>
+      <p>Late payment fee £12.00. Over limit fee £12.00. Returned payment fee £12.00.</p></div>
+    <div class="pb"><h2>Your transactions</h2>
+      <table><thead><tr><th>Transaction date</th><th>Posting date</th><th>Transaction details</th><th class="n">Amount £</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return { html, expected: { owed, txns: expected(txns) } };
+}
+
 (async () => {
   const only = process.argv.slice(2);
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  for (const [name, make] of [['layout-a', layoutA], ['layout-b', layoutB], ['layout-c', layoutC], ['layout-d', layoutD], ['layout-e', layoutE]]) {
+  for (const [name, make] of [['layout-a', layoutA], ['layout-b', layoutB], ['layout-c', layoutC], ['layout-d', layoutD], ['layout-e', layoutE], ['layout-f', layoutF]]) {
     if (only.length && !only.includes(name)) continue;
     const { html, expected: exp } = make();
     await page.setContent(html);

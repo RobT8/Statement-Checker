@@ -85,6 +85,10 @@ account you used last; the import screen has an **Account** picker either way.
   category alerts under "Across all accounts".
 - Each account is checked on its own, so balance checks, missing income and
   "large for you" compare like with like.
+- The PDF check screen has **Transactions start on** (reading starts at the
+  first transaction heading by default, skipping summary pages) and **Share
+  layout**, which saves an anonymised copy of the page layout for fixing a
+  misread.
 - A card's balance comes from its statement summary ("New balance"); a bank
   account's from the last running balance.
 
