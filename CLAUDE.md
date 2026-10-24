@@ -28,7 +28,7 @@ dates) and like visual explanations and analogies.
 2. **No build step.** Plain HTML/CSS/JS files served as-is. Pure logic files
    use a UMD-style footer: `module.exports` under Node, a global in the
    browser (`SC`, `CAT`, `PDFS`, `LOCK`, `REMIND`, `ACCT`).
-3. **Bump `CACHE` in `sw.js`** (currently `statement-check-v11`) whenever any
+3. **Bump `CACHE` in `sw.js`** (currently `statement-check-v12`) whenever any
    file changes, and add new files to its `FILES` list, or installed copies
    keep the old version and break offline.
 4. **Escape everything from statements** with `esc()` before it goes into
@@ -47,9 +47,9 @@ dates) and like visual explanations and analogies.
 | `pdfstatement.js` (`PDFS`) | Rebuilds statement tables from pdf.js text positions |
 | `lock.js` (`LOCK`) | PBKDF2 (600k) → AES-256-GCM encryption for the app lock, weak-code check, lockout timing |
 | `remind.js` (`REMIND`) | Monthly reminder dates: when it's due, snooze, once-a-month notify, `.ics` calendar file |
-| `accounts.js` (`ACCT`) | Accounts and cards: migration, matching a statement to an account, per-account ids, card signs, balances and the two totals |
+| `accounts.js` (`ACCT`) | Accounts and cards: migration, matching a statement to an account, per-account ids, card signs, balances, the two totals, `moveImport` (re-prefixes ids, re-keys txnCats/dismissed, flips signs onto/off a card) |
 | `sw.js` | Network-first service worker, cache for offline; shows the reminder notification on `periodicsync` |
-| `*.test.js` | `node --test` suites (50 tests, all passing) |
+| `*.test.js` | `node --test` suites (51 tests, all passing) |
 | `test-fixtures/` | Six generated fake PDF statements + expected JSON (`layout-e` is a card with transaction + posting dates, `layout-f` a card whose table starts on page 3). `make-fixtures.js [name…]` rebuilds them (needs Playwright). |
 
 ## Commands

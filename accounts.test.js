@@ -66,3 +66,29 @@ test('a statement listed newest first still gives the latest balance', () => {
   ] };
   assert.equal(ACCT.balance(db.accounts[0], db).amount, 450);
 });
+
+test('a statement put in the wrong account can be moved to a card, keeping categories and "it\'s fine"', () => {
+  const db = {
+    accounts: [{ id: 'main', type: 'current' }, { id: 'c1', type: 'card' }],
+    imports: [{ id: 'i2', accountId: 'main' }],
+    txns: [
+      { id: '2026-05-03|12.50|tesco#1', date: '2026-05-03', amount: 12.5, importId: 'i2', accountId: 'main' },
+      { id: '2026-05-04|30.00|shell#1', date: '2026-05-04', amount: 30, importId: 'i2', accountId: 'main' },
+      { id: '2026-05-09|-250.00|payment#1', date: '2026-05-09', amount: -250, importId: 'i2', accountId: 'main' },
+    ],
+    cats: { txnCats: { '2026-05-03|12.50|tesco#1': 'groceries' } },
+    dismissed: { '2026-05-04|30.00|shell#1|large': 1 },
+  };
+  assert.equal(ACCT.moveImport(db, 'i2', db.accounts[1]), 3);
+  assert.deepEqual(db.txns.map((t) => [t.id, t.amount, t.accountId]), [
+    ['c1|2026-05-03|-12.50|tesco#1', -12.5, 'c1'],
+    ['c1|2026-05-04|-30.00|shell#1', -30, 'c1'],
+    ['c1|2026-05-09|250.00|payment#1', 250, 'c1'],
+  ]);
+  assert.deepEqual(db.cats.txnCats, { 'c1|2026-05-03|-12.50|tesco#1': 'groceries' });
+  assert.deepEqual(Object.keys(db.dismissed), ['c1|2026-05-04|-30.00|shell#1|large']);
+  assert.equal(db.imports[0].accountId, 'c1');
+  // The new ids match what loading the same statement straight into the card gives.
+  const fresh = ACCT.idsFor(ACCT.cardSigns([{ date: '2026-05-03', desc: 'TESCO', amount: 12.5 }]), 'c1')[0].id;
+  assert.equal(fresh, 'c1|2026-05-03|-12.50|tesco#1');
+});

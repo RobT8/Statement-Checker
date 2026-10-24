@@ -83,6 +83,8 @@ account you used last; the import screen has an **Account** picker either way.
   account. The All view of Alerts lists each account's balance and two totals,
   **In accounts** and **Owed on cards**, then alerts grouped by account, with
   category alerts under "Across all accounts".
+- A statement put in the wrong account can be moved: **Statements → Move to**
+  under it (or to a new credit card). Categories and "it's fine" go with it.
 - **Transactions** tags every line 🏦 Bank or 💳 Card, and has **Period** (this
   month, last month, last 3 or 12 months, a year or a month), **Sort by** (date
   or value, either way; value sorting drops the month headings) and

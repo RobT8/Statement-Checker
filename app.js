@@ -561,7 +561,7 @@
     const months = [...new Set(viewTxns().map((t) => t.date.slice(0, 7)).concat(/^\d{4}-\d{2}$/.test(ui.period) ? [ui.period] : []))].sort().reverse();
     const years = [...new Set(months.map((x) => x.slice(0, 4)))];
     const opt = (v, l, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`;
-    const both = ui.account === 'all' && db.accounts.some((a) => a.type === 'card') && db.accounts.some((a) => a.type !== 'card');
+    const both = ui.account === 'all';
     return `<div class="tx-controls">
       <label><span>Period</span><select id="tx-period">
         ${opt('all', 'All time', ui.period)}${opt('this-month', 'This month', ui.period)}${opt('last-month', 'Last month', ui.period)}
@@ -596,7 +596,7 @@
     const flagged = new Set(result.flags.filter((f) => f.reasons.some((r) => !db.dismissed[r.key])).map((f) => f.txn.id));
     const q = ui.q.trim().toLowerCase();
     let list = [...viewTxns()];
-    const tagAcc = ui.account === 'all' && db.accounts.length > 1;
+    const tagAcc = ui.account === 'all';
     if (ui.account === 'all' && ui.kind !== 'all') {
       list = list.filter((t) => { const a = accountById(t.accountId); return a && (a.type === 'card') === (ui.kind === 'card'); });
     }
@@ -632,6 +632,10 @@
       ${txControls()}
       ${categoryProgress()}
       <p class="muted small" style="margin:4px 0">${list.length.toLocaleString('en-GB')} transactions · in ${money(list.reduce((s, t) => s + Math.max(0, t.amount), 0))} · out ${money(list.reduce((s, t) => s + Math.min(0, t.amount), 0))} · net ${money(total, true)}</p>`;
+    if (!list.length && ui.kind === 'card' && !db.accounts.some((a) => a.type === 'card')) {
+      return html + `<div class="empty"><p>No credit card statements loaded yet. If your card statement went into a bank account, open <b>Statements</b> and use <b>Move to</b> under it.</p>
+        <button class="btn small" data-tab="files">Go to Statements</button></div>`;
+    }
     if (!list.length) return html + '<div class="empty"><p>No matching transactions.</p></div>';
 
     let month = '';
@@ -866,7 +870,9 @@
           <div class="grow"><div class="ellipsis small"><b>${esc(im.name)}</b></div>
             <div class="muted small">${im.count} transactions${im.dupes ? ` · ${im.dupes} already loaded` : ''}${im.from ? ` · ${niceDate(im.from)} – ${niceDate(im.to)}` : ''}</div></div>
           <button class="btn small" data-remove="${esc(im.id)}" aria-label="Remove ${esc(im.name)}">Remove</button>
-        </div>`).join('')}
+        </div>
+        <div class="row small muted" style="margin:-4px 0 6px;gap:8px"><label for="mv-${esc(im.id)}" class="nowrap">Move to</label>
+          ${accountSelect(a.id, `id="mv-${esc(im.id)}" data-move-import="${esc(im.id)}" style="padding:6px 8px;font-size:14px"`)}</div>`).join('')}
     </div>`;
   }
 
@@ -1727,6 +1733,17 @@
     if (e.target.id === 'tx-sort') { ui.sort = e.target.value; ui.txLimit = 300; return render(); }
     if (e.target.id === 'tx-kind') { ui.kind = e.target.value; ui.txLimit = 300; return render(); }
     if (e.target.id === 'lock-timeout') { lockMeta.timeout = +e.target.value; writeMeta(); return toast('Saved.'); }
+    if (e.target.dataset.moveImport) {
+      const im = db.imports.find((x) => x.id === e.target.dataset.moveImport);
+      if (!im) return;
+      const target = resolveAccount(e.target.value, null, new Map());
+      const n = ACCT.moveImport(db, im.id, target);
+      // An account left with nothing in it (and no name of its own) goes.
+      db.accounts = db.accounts.filter((a) => db.imports.some((i) => i.accountId === a.id) || !Object.values(ACCT.TYPES).includes(a.name));
+      if (ui.account !== 'all' && !accountById(ui.account)) ui.account = 'all';
+      save(); reanalyse(); render();
+      return toast(`Moved ${n} transactions to ${ACCT.label(target)}.`);
+    }
     if (e.target.dataset.acctType) {
       const a = accountById(e.target.dataset.acctType);
       if (!a) return;

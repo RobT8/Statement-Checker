@@ -219,7 +219,7 @@
     const t = textLines.join('\n');
     const masked = t.match(/(?:[*xX•]{4}[\s-]?){3}(\d{4})\b/) || t.match(/card (?:number )?ending(?: in)?:?\s*(\d{4})\b/i);
     const sortCode = /sort code/i.test(t);
-    const card = (/credit limit/i.test(t) && /minimum payment/i.test(t)) || (!!masked && !sortCode);
+    const card = /credit limit|minimum (?:payment|repayment)|available credit/i.test(t) || (!!masked && !sortCode);
     let last4 = '';
     if (card && masked) last4 = masked[1];
     else {

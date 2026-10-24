@@ -103,7 +103,41 @@
     return out;
   }
 
-  const api = { TYPES, defaultName, label, icon, migrate, newId, match, idsFor, cardSigns, balance, totals };
+  // Moves one statement's transactions to another account (it was put in
+  // the wrong one). Ids get the new account's prefix and anything keyed by id
+  // follows; moving onto or off a card turns the signs round if they'd be
+  // back to front there.
+  function moveImport(db, importId, target) {
+    const im = db.imports.find((i) => i.id === importId);
+    if (!im || im.accountId === target.id) return 0;
+    const list = db.txns.filter((t) => t.importId === importId);
+    const from = db.accounts.find((a) => a.id === im.accountId);
+    const wasCard = !!from && from.type === 'card';
+    const isCard = target.type === 'card';
+    const flip = wasCard !== isCard && (isCard ? cardSigns(list) !== list : list.filter((t) => t.amount > 0).length > list.length * 0.6);
+    const rekey = (map, oldId, newId, suffix) => {
+      for (const k of Object.keys(map)) {
+        if (k === oldId || (suffix && k.startsWith(oldId + '|'))) { map[newId + k.slice(oldId.length)] = map[k]; delete map[k]; }
+      }
+    };
+    for (const t of list) {
+      let base = im.accountId === 'main' ? t.id : t.id.slice(im.accountId.length + 1);
+      if (flip) {
+        t.amount = -t.amount;
+        base = base.replace(/^(\d{4}-\d{2}-\d{2})\|(-?)(\d+\.\d{2})\|/, (m, d, neg, n) => `${d}|${neg ? '' : '-'}${n}|`);
+      }
+      const id = target.id === 'main' ? base : target.id + '|' + base;
+      if (db.cats && db.cats.txnCats) rekey(db.cats.txnCats, t.id, id, false);
+      if (db.dismissed) rekey(db.dismissed, t.id, id, true);
+      t.id = id;
+      t.accountId = target.id;
+    }
+    im.accountId = target.id;
+    if (flip && im.closing != null) im.closing = -im.closing;
+    return list.length;
+  }
+
+  const api = { moveImport, TYPES, defaultName, label, icon, migrate, newId, match, idsFor, cardSigns, balance, totals };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ACCT = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
