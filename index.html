@@ -168,6 +168,12 @@
     .tx .d b { display: block; font-size: 17px; color: var(--text); }
     .tx .a { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
     .tx .a.in { color: var(--in-text); }
+    .tx-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 4px 0 8px; }
+    .tx-controls label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--text2); min-width: 0; }
+    .tx-controls select { width: 100%; }
+    .acct-tag { display: inline-block; font-size: 12px; line-height: 18px; padding: 0 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--text); }
+    .acct-tag.card { border-color: var(--series-out); }
+    .acct-tag.bank { border-color: var(--series-in); }
     .month-h { display: flex; justify-content: space-between; font-size: 13px; color: var(--text2); margin: 18px 0 4px; font-weight: 600; }
 
     .chart { position: relative; }

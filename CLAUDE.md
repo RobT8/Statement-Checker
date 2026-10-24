@@ -28,7 +28,7 @@ dates) and like visual explanations and analogies.
 2. **No build step.** Plain HTML/CSS/JS files served as-is. Pure logic files
    use a UMD-style footer: `module.exports` under Node, a global in the
    browser (`SC`, `CAT`, `PDFS`, `LOCK`, `REMIND`, `ACCT`).
-3. **Bump `CACHE` in `sw.js`** (currently `statement-check-v10`) whenever any
+3. **Bump `CACHE` in `sw.js`** (currently `statement-check-v11`) whenever any
    file changes, and add new files to its `FILES` list, or installed copies
    keep the old version and break offline.
 4. **Escape everything from statements** with `esc()` before it goes into

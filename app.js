@@ -28,7 +28,7 @@
   let result = null;
   let cats = new Map(); // txn id -> { cat, source, confidence }
   let tab = 'alerts';
-  const ui = { sev: 'all', showDismissed: false, q: '', txFilter: 'all', cat: '', txLimit: 300, chartTable: false, notify: '', account: 'all' };
+  const ui = { sev: 'all', showDismissed: false, q: '', txFilter: 'all', cat: '', txLimit: 300, chartTable: false, notify: '', account: 'all', kind: 'all', period: 'all', sort: 'new' };
 
   function adopt(data) {
     db = Object.assign(blank(), data || {});
@@ -541,11 +541,76 @@
     </div>`;
   }
 
+  // A period as a date range: presets count back from today; "2026-03" is a
+  // month and "2026" a year.
+  function periodRange(p) {
+    const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    if (p === 'this-month') return [iso(new Date(y, m, 1)), iso(new Date(y, m + 1, 0))];
+    if (p === 'last-month') return [iso(new Date(y, m - 1, 1)), iso(new Date(y, m, 0))];
+    if (p === '3m') return [iso(new Date(y, m - 3, now.getDate() + 1)), iso(now)];
+    if (p === '12m') return [iso(new Date(y - 1, m, now.getDate() + 1)), iso(now)];
+    if (/^\d{4}-\d{2}$/.test(p)) return [p + '-01', p + '-31'];
+    if (/^\d{4}$/.test(p)) return [p + '-01-01', p + '-12-31'];
+    return null;
+  }
+
+  function txControls() {
+    const months = [...new Set(viewTxns().map((t) => t.date.slice(0, 7)).concat(/^\d{4}-\d{2}$/.test(ui.period) ? [ui.period] : []))].sort().reverse();
+    const years = [...new Set(months.map((x) => x.slice(0, 4)))];
+    const opt = (v, l, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`;
+    const both = ui.account === 'all' && db.accounts.some((a) => a.type === 'card') && db.accounts.some((a) => a.type !== 'card');
+    return `<div class="tx-controls">
+      <label><span>Period</span><select id="tx-period">
+        ${opt('all', 'All time', ui.period)}${opt('this-month', 'This month', ui.period)}${opt('last-month', 'Last month', ui.period)}
+        ${opt('3m', 'Last 3 months', ui.period)}${opt('12m', 'Last 12 months', ui.period)}
+        ${years.length > 1 ? `<optgroup label="Year">${years.map((x) => opt(x, x, ui.period)).join('')}</optgroup>` : ''}
+        <optgroup label="Month">${months.map((x) => opt(x, SC.monthName(x), ui.period)).join('')}</optgroup>
+      </select></label>
+      <label><span>Sort by</span><select id="tx-sort">
+        ${opt('new', 'Date — newest first', ui.sort)}${opt('old', 'Date — oldest first', ui.sort)}
+        ${opt('big', 'Value — largest first', ui.sort)}${opt('small', 'Value — smallest first', ui.sort)}
+      </select></label>
+      ${both ? `<label><span>Accounts</span><select id="tx-kind">
+        ${opt('all', 'Bank and cards', ui.kind)}${opt('bank', '🏦 Bank accounts', ui.kind)}${opt('card', '💳 Credit cards', ui.kind)}
+      </select></label>` : ''}
+      <label><span>Category</span><select id="cat-filter">
+        <option value="">All categories</option>
+        <option value="__none" ${ui.cat === '__none' ? 'selected' : ''}>Not categorised</option>
+        <option value="__guess" ${ui.cat === '__guess' ? 'selected' : ''}>Guessed — needs checking</option>
+        ${db.cats.list.map((c) => `<option value="${esc(c.id)}" ${ui.cat === c.id ? 'selected' : ''}>${esc(c.icon + ' ' + c.name)}</option>`).join('')}
+      </select></label>
+    </div>`;
+  }
+
+  // Which account a line came from: a small labelled tag, bank or card.
+  function accountTag(t) {
+    const a = accountById(t.accountId);
+    if (!a) return '';
+    return `<span class="acct-tag ${a.type === 'card' ? 'card' : 'bank'}" title="${esc(ACCT.label(a))}">${a.type === 'card' ? '💳 Card' : '🏦 Bank'}</span> `;
+  }
+
   function renderTransactions() {
     const flagged = new Set(result.flags.filter((f) => f.reasons.some((r) => !db.dismissed[r.key])).map((f) => f.txn.id));
     const q = ui.q.trim().toLowerCase();
-    let list = [...viewTxns()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    let list = [...viewTxns()];
     const tagAcc = ui.account === 'all' && db.accounts.length > 1;
+    if (ui.account === 'all' && ui.kind !== 'all') {
+      list = list.filter((t) => { const a = accountById(t.accountId); return a && (a.type === 'card') === (ui.kind === 'card'); });
+    }
+    const range = periodRange(ui.period);
+    if (range) list = list.filter((t) => t.date >= range[0] && t.date <= range[1]);
+    const byDate = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+    const sorts = {
+      new: (a, b) => byDate(b, a),
+      old: byDate,
+      big: (a, b) => Math.abs(b.amount) - Math.abs(a.amount) || byDate(b, a),
+      small: (a, b) => Math.abs(a.amount) - Math.abs(b.amount) || byDate(b, a),
+    };
+    list.sort(sorts[ui.sort] || sorts.new);
+    const byMonth = ui.sort === 'new' || ui.sort === 'old';
     if (q) {
       list = list.filter((t) => t.desc.toLowerCase().includes(q) || t.merchant.includes(q) || t.date.startsWith(q) ||
         Math.abs(t.amount).toFixed(2).includes(q));
@@ -564,14 +629,9 @@
         ${[['all', 'All'], ['flagged', 'Flagged'], ['out', 'Money out'], ['in', 'Money in']].map(([k, l]) =>
           `<button class="chip" data-txf="${k}" aria-pressed="${ui.txFilter === k}">${l}</button>`).join('')}
       </div>
-      <select id="cat-filter" aria-label="Filter by category" style="margin:4px 0 8px">
-        <option value="">All categories</option>
-        <option value="__none" ${ui.cat === '__none' ? 'selected' : ''}>Not categorised</option>
-        <option value="__guess" ${ui.cat === '__guess' ? 'selected' : ''}>Guessed — needs checking</option>
-        ${db.cats.list.map((c) => `<option value="${esc(c.id)}" ${ui.cat === c.id ? 'selected' : ''}>${esc(c.icon + ' ' + c.name)}</option>`).join('')}
-      </select>
+      ${txControls()}
       ${categoryProgress()}
-      <p class="muted small" style="margin:4px 0">${list.length.toLocaleString('en-GB')} transactions · net ${money(total, true)}</p>`;
+      <p class="muted small" style="margin:4px 0">${list.length.toLocaleString('en-GB')} transactions · in ${money(list.reduce((s, t) => s + Math.max(0, t.amount), 0))} · out ${money(list.reduce((s, t) => s + Math.min(0, t.amount), 0))} · net ${money(total, true)}</p>`;
     if (!list.length) return html + '<div class="empty"><p>No matching transactions.</p></div>';
 
     let month = '';
@@ -583,9 +643,10 @@
       if (t.amount > 0) e.in += t.amount; else e.out += t.amount;
       monthTotals.set(m, e);
     }
+    if (!byMonth) { html += '<div class="card" style="padding:0 14px;margin-top:12px">'; open = true; }
     for (const t of list.slice(0, ui.txLimit)) {
       const m = t.date.slice(0, 7);
-      if (m !== month) {
+      if (byMonth && m !== month) {
         if (open) html += '</div>';
         const e = monthTotals.get(m);
         html += `<div class="month-h"><span>${SC.monthName(m)}</span><span>in ${money(e.in)} · out ${money(e.out)}</span></div><div class="card" style="padding:0 14px">`;
@@ -594,9 +655,9 @@
       }
       const d = new Date(t.date + 'T00:00:00Z');
       html += `<div class="tx" data-cat-txn="${esc(t.id)}" role="button" tabindex="0" aria-label="Set category for ${esc(t.desc)}">
-        <div class="d"><b>${d.getUTCDate()}</b>${d.toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'UTC' })}</div>
+        <div class="d"><b>${d.getUTCDate()}</b>${d.toLocaleDateString('en-GB', byMonth ? { weekday: 'short', timeZone: 'UTC' } : { month: 'short', timeZone: 'UTC' })}${byMonth ? '' : `<br>${d.getUTCFullYear()}`}</div>
         <div class="grow"><div class="ellipsis">${flagged.has(t.id) ? '<span class="sev high" title="Flagged"><i aria-hidden="true"></i></span> ' : ''}${esc(SC.titleCase(t.merchant))}</div>
-          <div class="muted small ellipsis">${tagAcc && accountById(t.accountId) ? `<span title="${esc(ACCT.label(accountById(t.accountId)))}">${ACCT.icon(accountById(t.accountId))}</span> ` : ''}${catPill(t)} ${esc(t.desc)}</div></div>
+          <div class="muted small ellipsis">${tagAcc ? accountTag(t) : ''}${catPill(t)} ${esc(t.desc)}</div></div>
         <div class="a ${t.amount > 0 ? 'in' : ''}">${money(t.amount, true)}</div>
       </div>`;
     }
@@ -1566,7 +1627,7 @@
       save(); reanalyse(); return render();
     }
     if (d.catTxn) return openPicker(d.catTxn);
-    if (d.catfilter) { ui.cat = d.catfilter === '__none' ? '__none' : d.catfilter; ui.q = ''; ui.txFilter = 'all'; return go('transactions'); }
+    if (d.catfilter) { ui.period = 'all'; ui.cat = d.catfilter === '__none' ? '__none' : d.catfilter; ui.q = ''; ui.txFilter = 'all'; return go('transactions'); }
     if (d.delcat) {
       const c = catById(d.delcat);
       if (!c || !confirm(`Delete the category “${c.name}”? Payments in it become uncategorised.`)) return;
@@ -1574,8 +1635,8 @@
       for (const m of [db.cats.payeeCats, db.cats.txnCats]) for (const k of Object.keys(m)) if (m[k] === c.id) delete m[k];
       save(); recategorise(); return render();
     }
-    if (d.merchant) { ui.q = d.merchant; ui.txFilter = 'all'; return go('transactions'); }
-    if (d.month) { ui.q = d.month; ui.txFilter = 'out'; return go('transactions'); }
+    if (d.merchant) { ui.period = 'all'; ui.q = d.merchant; ui.txFilter = 'all'; return go('transactions'); }
+    if (d.month) { ui.period = 'all'; ui.q = d.month; ui.txFilter = 'out'; return go('transactions'); }
     if (d.acctView) {
       ui.account = d.acctView;
       ui.sev = 'all';
@@ -1662,6 +1723,9 @@
 
   document.addEventListener('change', (e) => {
     if (e.target.id === 'cat-filter') { ui.cat = e.target.value; ui.txLimit = 300; return render(); }
+    if (e.target.id === 'tx-period') { ui.period = e.target.value; ui.txLimit = 300; return render(); }
+    if (e.target.id === 'tx-sort') { ui.sort = e.target.value; ui.txLimit = 300; return render(); }
+    if (e.target.id === 'tx-kind') { ui.kind = e.target.value; ui.txLimit = 300; return render(); }
     if (e.target.id === 'lock-timeout') { lockMeta.timeout = +e.target.value; writeMeta(); return toast('Saved.'); }
     if (e.target.dataset.acctType) {
       const a = accountById(e.target.dataset.acctType);
